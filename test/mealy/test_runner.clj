@@ -5,6 +5,7 @@
             [mealy.cell.mitosis-test]
             [mealy.cell.reducer-test]
             [mealy.core]
+            [mealy.ooda.actuator-test]
             [mealy.ooda.prompt-test]
             [mealy.shell.core-test]
             [mealy.shell.topology-test]))
