@@ -1,6 +1,7 @@
 (ns mealy.test-runner
   "Test runner for Mealy"
   (:require [clojure.test :as t]
+            [mealy.cell.core-test]
             [mealy.core]))
 
 (defn -main
