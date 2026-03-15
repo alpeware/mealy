@@ -1,6 +1,3 @@
-Here is the synthesized design document, specifically tailored to context-load an LLM coding agent. It strips away the metaphors, formally defines the cybernetic primitives, enforces the pure Sans-IO constraint, and cleanly replaces the `flow` library with native `core.async` channels.
-
----
 # Mealy Architecture Overview
 
 ## 1. System Overview
