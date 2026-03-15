@@ -2,6 +2,7 @@
   "Test runner for Mealy"
   (:require [clojure.test :as t]
             [mealy.cell.core-test]
+            [mealy.cell.reducer-test]
             [mealy.core]))
 
 (defn -main
