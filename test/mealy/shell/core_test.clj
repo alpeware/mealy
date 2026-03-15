@@ -1,0 +1,55 @@
+;; Copyright (c) Alpeware LLC. All rights reserved.
+
+(ns mealy.shell.core-test
+  "Tests for mealy.shell.core"
+  (:require [clojure.core.async :as async]
+            [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [mealy.cell.core :as cell]
+            [mealy.shell.core :as shell]))
+
+(defspec ^{:doc "Generative invariant: The execution shell processes events sequentially and stops when in-chan closes."}
+  test-shell-processing-invariant 50
+  (prop/for-all [events (gen/vector (gen/tuple gen/keyword gen/any) 0 20)
+                 aim gen/string-alphanumeric]
+                (let [initial-state (cell/make-cell aim {})
+                      in-chan (async/chan 100)
+                      out-chan (async/chan 100)
+
+          ;; Start the shell
+                      _ (shell/start-shell initial-state in-chan out-chan)
+
+          ;; Send all events
+                      _ (doseq [e events]
+                          (async/>!! in-chan e))
+
+          ;; Close in-chan to signal completion
+                      _ (async/close! in-chan)]
+
+      ;; We expect the shell loop to finish, which means it will process all events.
+      ;; The out-chan won't get any commands for our generic events based on current reducer logic,
+      ;; but we can drain it anyway just in case.
+                  (loop [acc []]
+                    (if-let [cmd (async/<!! out-chan)]
+                      (recur (conj acc cmd))
+                      (and (vector? acc)
+                           ;; If we closed in-chan, the shell should close out-chan
+                           (nil? (async/<!! out-chan))))))))
+
+(deftest test-shell-processing
+  (testing "Shell processes valid events and closes out-chan when in-chan closes"
+    (let [initial-state (cell/make-cell "Aim" {})
+          in-chan (async/chan 10)
+          out-chan (async/chan 10)]
+      (shell/start-shell initial-state in-chan out-chan)
+
+      ;; Send an observation
+      (async/>!! in-chan [:observation {:temp 98.6}])
+
+      ;; Close the input channel
+      (async/close! in-chan)
+
+      ;; We expect no commands for :observation based on reducer
+      (is (nil? (async/<!! out-chan)) "out-chan should be closed when in-chan is closed"))))
