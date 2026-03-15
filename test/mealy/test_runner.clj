@@ -4,7 +4,8 @@
             [mealy.cell.core-test]
             [mealy.cell.mitosis-test]
             [mealy.cell.reducer-test]
-            [mealy.core]))
+            [mealy.core]
+            [mealy.shell.core-test]))
 
 (defn -main
   "Main entry point for running tests"
