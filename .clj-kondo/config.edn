@@ -1,6 +1,10 @@
 {:linters
  {:large-def {:level :warning :row-threshold 60}
   :too-many-params {:level :warning :max-params 5}
-  :missing-docstring {:level :warning}
+  :missing-docstring {:level :warning
+                      :exclude-vars [mealy.ooda.prompt-test/compile-prompt-returns-string
+                                     mealy.ooda.prompt-test/compile-prompt-basic-test
+                                     mealy.ooda.prompt-test/test-compile-prompt-returns-string]
+                      :exclude-namespaces [mealy.ooda.prompt-test]}
   :unsorted-required-namespaces {:level :warning}}
  :lint-as {clojure.test.check.clojure-test/defspec clojure.core/def}}
