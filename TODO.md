@@ -3,7 +3,7 @@
 ## Phase 1: The Pure Cell (Atomic State Machine)
 - [x] Implement `mealy.cell.core`: define the core `Cell` data structure (Aim, Memory, Observations).
 - [x] Implement `mealy.cell.reducer`: the pure Sans-IO `(handle-event state event)` Mealy machine.
-- [ ] Implement `mealy.cell.mitosis`: pure functions to split a parent state map into a child Genesis State based on threshold parameters.
+- [x] Implement `mealy.cell.mitosis`: pure functions to split a parent state map into a child Genesis State based on threshold parameters.
 
 ## Phase 2: The Execution Shell (Autopoiesis)
 - [ ] Implement `mealy.shell.core`: the `go-loop` adapter that multiplexes `:in-chan` and routes `:out-chan` commands.
