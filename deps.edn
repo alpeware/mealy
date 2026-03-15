@@ -1,0 +1,12 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
+        org.clojure/core.async {:mvn/version "1.9.829-alpha2"}
+        org.babashka/sci {:mvn/version "0.12.51"}
+        com.taoensso/nippy {:mvn/version "3.6.0"}}
+ :aliases {:test {:extra-paths ["test"]
+                  :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}}}
+           :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2026.01.19"}
+                                 org.clojure/test.check {:mvn/version "1.1.1"}}
+                  :main-opts ["-m" "clj-kondo.main" "--lint" "src" "test"]}
+           :format {:replace-deps {dev.weavejester/cljfmt {:mvn/version "0.16.1"}}
+                    :main-opts ["-m" "cljfmt.main" "fix" "src" "test"]}}}
