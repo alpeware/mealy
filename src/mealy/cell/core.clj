@@ -7,4 +7,5 @@
   [aim memory]
   {:aim aim
    :memory memory
-   :observations []})
+   :observations []
+   :phase :idle})

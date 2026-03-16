@@ -11,22 +11,73 @@
   test-handle-event-invariant 100
   (prop/for-all [aim (gen/one-of [(gen/return "a string") (gen/return :a-keyword) (gen/return 'a-symbol)])
                  memory (gen/map gen/keyword gen/any)
+                 phase (gen/elements [:idle :evaluating :acting])
                  event (gen/tuple gen/keyword gen/any)]
-                (let [c (cell/make-cell aim memory)
+                (let [c (assoc (cell/make-cell aim memory) :phase phase)
                       result (reducer/handle-event c event)]
                   (and (map? result)
                        (contains? result :state)
                        (contains? result :commands)
                        (map? (:state result))
-                       (vector? (:commands result))))))
+                       (vector? (:commands result))
+                       (contains? (:state result) :phase)))))
 
-(deftest test-handle-observation
-  (testing "[:observation data] event appends data to state's observations and returns empty commands"
+(deftest test-handle-observation-idle
+  (testing "[:observation data] event while :idle appends data to state's observations, transitions to :evaluating, and yields a :llm-request command"
     (let [c (cell/make-cell "Survive" {})
           event [:observation {:temp 98.6}]
-          result (reducer/handle-event c event)]
-      (is (= [{:temp 98.6}] (get-in result [:state :observations])))
-      (is (= [] (:commands result))))))
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          commands (:commands result)]
+      (is (= [{:temp 98.6}] (:observations new-state)))
+      (is (= :evaluating (:phase new-state)))
+      (is (= 1 (count commands)))
+      (is (= :llm-request (:type (first commands))))
+      (is (= :high (:complexity (first commands))))
+      (is (= :consent-evaluated (:callback-event (first commands)))))))
+
+(deftest test-handle-observation-not-idle
+  (testing "[:observation data] event while not :idle buffers observation but yields no commands"
+    (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
+          event [:observation {:temp 98.6}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          commands (:commands result)]
+      (is (= [{:temp 98.6}] (:observations new-state)))
+      (is (= :evaluating (:phase new-state)))
+      (is (empty? commands)))))
+
+(deftest test-handle-consent-evaluated-positive
+  (testing "[:consent-evaluated data] with positive consent transitions to :acting and yields an :execute-action command"
+    (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
+          event [:consent-evaluated {:response "I CONSENT to this action"}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          commands (:commands result)]
+      (is (= :acting (:phase new-state)))
+      (is (= 1 (count commands)))
+      (is (= :execute-action (:type (first commands)))))))
+
+(deftest test-handle-consent-evaluated-objection
+  (testing "[:consent-evaluated data] with objection transitions to :idle and yields no commands"
+    (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
+          event [:consent-evaluated {:response "I have an OBJECTION to this action"}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          commands (:commands result)]
+      (is (= :idle (:phase new-state)))
+      (is (empty? commands)))))
+
+(deftest test-handle-evaluation-error
+  (testing "[:evaluation-error data] transitions to :idle, records the error, and yields no commands"
+    (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
+          event [:evaluation-error {:reason "Timeout"}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          commands (:commands result)]
+      (is (= :idle (:phase new-state)))
+      (is (= "Timeout" (:last-error new-state)))
+      (is (empty? commands)))))
 
 (deftest test-handle-unknown-event
   (testing "Unknown event returns state unchanged and empty commands"

@@ -1,6 +1,7 @@
 (ns mealy.cell.reducer
   "The pure Sans-IO Mealy machine reducer."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [mealy.ooda.prompt :as prompt]))
 
 (defn parse-consent
   "Pure function to parse the LLM's response string.
@@ -18,6 +19,29 @@
   [state event]
   (let [[event-type event-data] event]
     (case event-type
-      :observation {:state (update state :observations conj event-data)
-                    :commands []}
+      :observation
+      (let [new-state (update state :observations conj event-data)]
+        (if (= (:phase new-state) :idle)
+          {:state (assoc new-state :phase :evaluating)
+           :commands [{:type :llm-request
+                       :prompt (prompt/compile-prompt new-state)
+                       :complexity :high
+                       :callback-event :consent-evaluated}]}
+          {:state new-state
+           :commands []}))
+
+      :consent-evaluated
+      (let [{:keys [consent]} (parse-consent (:response event-data))]
+        (if consent
+          {:state (assoc state :phase :acting)
+           :commands [{:type :execute-action}]}
+          {:state (assoc state :phase :idle)
+           :commands []}))
+
+      :evaluation-error
+      {:state (-> state
+                  (assoc :phase :idle)
+                  (assoc :last-error (:reason event-data)))
+       :commands []}
+
       {:state state :commands []})))
