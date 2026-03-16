@@ -51,5 +51,10 @@
       ;; Close the input channel
       (async/close! in-chan)
 
-      ;; We expect no commands for :observation based on reducer
+      ;; We expect the command from the phase transition
+      (let [cmd (async/<!! out-chan)]
+        (is (not (nil? cmd)) "Should yield a command for observation in idle phase")
+        (is (= :llm-request (:type cmd))))
+
+      ;; Then the out-chan should be closed
       (is (nil? (async/<!! out-chan)) "out-chan should be closed when in-chan is closed"))))
