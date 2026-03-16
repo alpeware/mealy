@@ -28,16 +28,25 @@
                        (= response (:response result))))))
 
 (deftest start-actuator-test
-  (testing "actuator processes commands and emits observations"
+  (testing "actuator processes commands and emits observations using router-chan"
     (let [cmd-chan (async/chan 10)
           cell-in-chan (async/chan 10)
-          llm-fn (fn [prompt] (str "CONSENT: " prompt "-response"))]
+          router-chan (async/chan 10)]
 
       ;; Start the actuator
-      (actuator/start-actuator cmd-chan cell-in-chan llm-fn)
+      (actuator/start-actuator cmd-chan cell-in-chan router-chan)
 
       ;; Send a command to the actuator
-      (>!! cmd-chan {:type :evaluate-prompt :prompt "test-prompt"})
+      (>!! cmd-chan {:type :evaluate-prompt :prompt "test-prompt" :estimated-tokens 50 :complexity :low})
+
+      ;; Mock the router behavior
+      (let [router-cmd (<!! router-chan)]
+        (is (= :evaluate (:type router-cmd)))
+        (is (= "test-prompt" (:prompt router-cmd)))
+        (is (= 50 (:estimated-tokens router-cmd)))
+        (is (= :low (:complexity router-cmd)))
+        ;; Send back a successful response on the reply-chan
+        (>!! (:reply-chan router-cmd) {:response "CONSENT: test-prompt-response"}))
 
       ;; Read the resulting observation from the cell's input channel
       (let [observation (<!! cell-in-chan)]
@@ -48,4 +57,32 @@
           (is (= "CONSENT: test-prompt-response" (:response obs-data)))))
 
       ;; Clean up
-      (async/close! cmd-chan))))
+      (async/close! cmd-chan)
+      (async/close! router-chan)))
+
+  (testing "actuator handles router errors gracefully"
+    (let [cmd-chan (async/chan 10)
+          cell-in-chan (async/chan 10)
+          router-chan (async/chan 10)]
+
+      ;; Start the actuator
+      (actuator/start-actuator cmd-chan cell-in-chan router-chan)
+
+      ;; Send a command to the actuator
+      (>!! cmd-chan {:type :evaluate-prompt :prompt "test-prompt"})
+
+      ;; Mock the router behavior sending an error
+      (let [router-cmd (<!! router-chan)]
+        (is (= :evaluate (:type router-cmd)))
+        (>!! (:reply-chan router-cmd) {:status :error :reason :no-available-provider}))
+
+      ;; Read the resulting error observation from the cell's input channel
+      (let [observation (<!! cell-in-chan)]
+        (is (= :observation (first observation)))
+        (let [obs-data (second observation)]
+          (is (= :evaluation-error (:type obs-data)))
+          (is (= :no-available-provider (:reason obs-data)))))
+
+      ;; Clean up
+      (async/close! cmd-chan)
+      (async/close! router-chan))))
