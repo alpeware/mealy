@@ -6,6 +6,7 @@
             [mealy.cell.reducer-test]
             [mealy.core]
             [mealy.intelligence.provider-test]
+            [mealy.intelligence.router-test]
             [mealy.ooda.actuator-test]
             [mealy.ooda.prompt-test]
             [mealy.shell.core-test]
