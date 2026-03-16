@@ -5,6 +5,7 @@
             [mealy.cell.mitosis-test]
             [mealy.cell.reducer-test]
             [mealy.core]
+            [mealy.intelligence.adapters.gemini-test]
             [mealy.intelligence.gateway-test]
             [mealy.intelligence.provider-test]
             [mealy.intelligence.router-test]

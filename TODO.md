@@ -21,5 +21,5 @@
 ## Phase 5: Generic Intelligence Gateway & Provider Adapters
 - [x] **Dependency Update:** Add `hato/hato {:mvn/version "1.0.0"}` to `deps.edn` to provide a lean, asynchronous Java 11+ HTTP client.
 - [x] **Generalize the Actuator:** Refactor `mealy.ooda.actuator` into a generic `mealy.intelligence.gateway`. It must blindly forward `{:type :llm-request, :prompt "...", :callback-event :my-event}` commands to the Router, and wrap the raw string response in `[:observation {:type :my-event, :response "..."}]`. Move `parse-consent` logic completely out of the IO boundary and into the pure Cell reducer.
-- [ ] **Gemini Adapter:** Implement `mealy.intelligence.adapters.gemini`. Use `hato/request-async` to build a non-blocking Provider Actor that interfaces securely with the Gemini REST API.
+- [x] **Gemini Adapter:** Implement `mealy.intelligence.adapters.gemini`. Use `hato/request-async` to build a non-blocking Provider Actor that interfaces securely with the Gemini REST API.
 - [ ] **Llama Adapter:** Implement `mealy.intelligence.adapters.llama`. Use `hato/request-async` to build a non-blocking Provider Actor that interfaces with a local Llama instance (e.g., via the local Ollama REST API).
