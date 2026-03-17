@@ -1,14 +1,13 @@
 (ns mealy.intelligence.integration-test
   (:require [clojure.core.async :as async]
             [clojure.test :refer [deftest is testing]]
-            [mealy.intelligence.gateway :as gateway]
+            [mealy.action.core :as action]
             [mealy.intelligence.provider :as provider]
             [mealy.intelligence.router :as router]))
 
-(deftest gateway-to-provider-flow-test
-  (testing "End-to-end flow from gateway to provider and back to cell"
-    (let [gateway-cmd-chan (async/chan 10)
-          cell-in-chan (async/chan 10)
+(deftest action-to-provider-flow-test
+  (testing "End-to-end flow from llm-request action to provider and back to cell"
+    (let [cell-in-chan (async/chan 10)
           router-cmd-chan (async/chan 10)
           provider-low-chan (async/chan 10)
           provider-high-chan (async/chan 10)
@@ -37,18 +36,14 @@
           :provider-high {:chan provider-high-chan :complexity :high}}
          router-cmd-chan)
 
-        ;; Spin up gateway
-        (gateway/start-gateway
-         gateway-cmd-chan
-         cell-in-chan
-         router-cmd-chan)
-
-        ;; Send the request to gateway
-        (async/>!! gateway-cmd-chan
-                   {:type :llm-request
-                    :prompt "Hello"
-                    :complexity :low
-                    :callback-event :hello-received})
+        ;; Execute the llm-request action directly
+        (action/execute
+         {:type :llm-request
+          :prompt "Hello"
+          :complexity :low
+          :callback-event :hello-received}
+         {:router-chan router-cmd-chan
+          :cell-in-chan cell-in-chan})
 
         ;; Wait for the result
         (let [[val port] (async/alts!! [cell-in-chan (async/timeout 1000)])]
@@ -56,7 +51,6 @@
           (is (= [:observation {:type :hello-received :response "Mock LLM Response"}] val)))
 
         (finally
-          (async/close! gateway-cmd-chan)
           (async/close! cell-in-chan)
           (async/close! router-cmd-chan)
           (async/close! provider-low-chan)

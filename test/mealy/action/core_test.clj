@@ -14,17 +14,18 @@
       (is (= :success (action/execute action env))))))
 
 (deftest test-think-action
-  (testing "the :think action forwards an llm-request to the gateway-chan"
-    (let [gateway-chan (a/chan 1)
+  (testing "the :think action forwards an llm-request to the out-chan"
+    (let [out-chan (a/chan 1)
           action {:type :think :prompt "What is the meaning of life?"}
-          env {:gateway-chan gateway-chan}]
+          env {:out-chan out-chan}]
       (action/execute action env)
-      (let [expected {:type :llm-request
-                      :prompt "What is the meaning of life?"
-                      :callback-event :thought-result}
+      (let [expected {:type :execute-action
+                      :action {:type :llm-request
+                               :prompt "What is the meaning of life?"
+                               :callback-event :thought-result}}
             ;; alts!! with timeout prevents test hangs
-            [val port] (a/alts!! [gateway-chan (a/timeout 100)])]
-        (is (= gateway-chan port) "A value should be put on the gateway-chan")
+            [val port] (a/alts!! [out-chan (a/timeout 100)])]
+        (is (= out-chan port) "A value should be put on the out-chan")
         (is (= expected val) "The correct llm-request should be constructed and sent")))))
 
 (deftest test-eval-action-success
@@ -48,6 +49,58 @@
         (is (= :observation (first val)) "The first element should be :observation")
         (is (= :eval-error (:type (second val))) "The type should be :eval-error")
         (is (string? (:error (second val))) "The error should be a string message")))))
+
+(deftest test-llm-request-action-success
+  (testing "the :llm-request action forwards evaluation to router and puts success on cell-in-chan"
+    (let [router-chan (a/chan 1)
+          cell-in-chan (a/chan 1)
+          action {:type :llm-request
+                  :prompt "test-prompt"
+                  :callback-event :my-event
+                  :estimated-tokens 50
+                  :complexity :low}
+          env {:router-chan router-chan :cell-in-chan cell-in-chan}]
+      (action/execute action env)
+      ;; Mock the router behavior
+      (let [[router-cmd port] (a/alts!! [router-chan (a/timeout 100)])]
+        (is (= router-chan port))
+        (is (= :evaluate (:type router-cmd)))
+        (is (= "test-prompt" (:prompt router-cmd)))
+        (is (= 50 (:estimated-tokens router-cmd)))
+        (is (= :low (:complexity router-cmd)))
+        ;; Send back a successful response on the reply-chan
+        (a/>!! (:reply-chan router-cmd) {:response "some raw llm response"}))
+
+      ;; Read the resulting observation from the cell's input channel
+      (let [[observation port] (a/alts!! [cell-in-chan (a/timeout 100)])]
+        (is (= cell-in-chan port))
+        (is (= :observation (first observation)))
+        (let [obs-data (second observation)]
+          (is (= :my-event (:type obs-data)))
+          (is (= "some raw llm response" (:response obs-data))))))))
+
+(deftest test-llm-request-action-error
+  (testing "the :llm-request action handles router errors gracefully"
+    (let [router-chan (a/chan 1)
+          cell-in-chan (a/chan 1)
+          action {:type :llm-request
+                  :prompt "test-prompt"
+                  :callback-event :my-event}
+          env {:router-chan router-chan :cell-in-chan cell-in-chan}]
+      (action/execute action env)
+      ;; Mock the router behavior sending an error
+      (let [[router-cmd port] (a/alts!! [router-chan (a/timeout 100)])]
+        (is (= router-chan port))
+        (is (= :evaluate (:type router-cmd)))
+        (a/>!! (:reply-chan router-cmd) {:status :error :reason :no-available-provider}))
+
+      ;; Read the resulting error observation from the cell's input channel
+      (let [[observation port] (a/alts!! [cell-in-chan (a/timeout 100)])]
+        (is (= cell-in-chan port))
+        (is (= :observation (first observation)))
+        (let [obs-data (second observation)]
+          (is (= :evaluation-error (:type obs-data)))
+          (is (= :no-available-provider (:reason obs-data))))))))
 
 (deftest test-von-neumann-self-modification
   (testing "the :eval action allows defining new defmethods for action/execute"

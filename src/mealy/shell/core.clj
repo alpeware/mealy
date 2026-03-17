@@ -12,12 +12,13 @@
 (defn- start-worker-pool
   "Starts a generic worker pool to drain `out-chan` and execute actions via `mealy.action.core/execute`."
   [out-chan opts]
-  (let [num-workers (:workers opts 4)]
+  (let [num-workers (:workers opts 4)
+        env (assoc opts :out-chan out-chan)]
     (dotimes [_ num-workers]
       (go-loop []
         (when-let [cmd (<! out-chan)]
           (when (= (:type cmd) :execute-action)
-            (action/execute (:action cmd) opts))
+            (action/execute (:action cmd) env))
           (recur))))))
 
 (defn restore-cell

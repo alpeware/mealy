@@ -23,7 +23,7 @@
                        (contains? (:state result) :phase)))))
 
 (deftest test-handle-observation-idle
-  (testing "[:observation data] event while :idle appends data to state's observations, transitions to :evaluating, and yields a :llm-request command"
+  (testing "[:observation data] event while :idle appends data to state's observations, transitions to :evaluating, and yields a :execute-action command for :llm-request"
     (let [c (cell/make-cell "Survive" {})
           event [:observation {:temp 98.6}]
           result (reducer/handle-event c event)
@@ -32,9 +32,10 @@
       (is (= [{:temp 98.6}] (:observations new-state)))
       (is (= :evaluating (:phase new-state)))
       (is (= 1 (count commands)))
-      (is (= :llm-request (:type (first commands))))
-      (is (= :high (:complexity (first commands))))
-      (is (= :consent-evaluated (:callback-event (first commands)))))))
+      (is (= :execute-action (:type (first commands))))
+      (is (= :llm-request (:type (:action (first commands)))))
+      (is (= :high (:complexity (:action (first commands)))))
+      (is (= :consent-evaluated (:callback-event (:action (first commands))))))))
 
 (deftest test-handle-observation-reflex
   (testing "[:observation data] matching a reflex yields the reflex command and remains :idle"
@@ -120,7 +121,7 @@
                        (= response (:response result))))))
 
 (deftest test-handle-propose-policy
-  (testing "[:propose-policy data] event while :idle appends code to state's memory :proposed-policies, transitions to :evaluating, and yields a :llm-request command"
+  (testing "[:propose-policy data] event while :idle appends code to state's memory :proposed-policies, transitions to :evaluating, and yields an :execute-action command for :llm-request"
     (let [c (cell/make-cell "Survive" {})
           event [:propose-policy {:code "(defmethod execute :new-skill ...)"}]
           result (reducer/handle-event c event)
@@ -129,9 +130,10 @@
       (is (= ["(defmethod execute :new-skill ...)"] (get-in new-state [:memory :proposed-policies])))
       (is (= :evaluating (:phase new-state)))
       (is (= 1 (count commands)))
-      (is (= :llm-request (:type (first commands))))
-      (is (= :high (:complexity (first commands))))
-      (is (= :policy-consent-evaluated (:callback-event (first commands)))))))
+      (is (= :execute-action (:type (first commands))))
+      (is (= :llm-request (:type (:action (first commands)))))
+      (is (= :high (:complexity (:action (first commands)))))
+      (is (= :policy-consent-evaluated (:callback-event (:action (first commands))))))))
 
 (deftest test-handle-policy-consent-evaluated-positive
   (testing "[:policy-consent-evaluated data] with positive consent transitions to :acting, pops the policy, and yields an :execute-action command for :eval"

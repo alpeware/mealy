@@ -13,11 +13,31 @@
 
 (.addMethod execute :think
             (with-meta
-              (fn [{:keys [prompt]} {:keys [gateway-chan]}]
-                (a/put! gateway-chan {:type :llm-request
-                                      :prompt prompt
-                                      :callback-event :thought-result}))
+              (fn [{:keys [prompt]} {:keys [out-chan]}]
+                (a/put! out-chan {:type :execute-action
+                                  :action {:type :llm-request
+                                           :prompt prompt
+                                           :callback-event :thought-result}}))
               {:doc "Delegates a cognitive task to the LLM. Expects a :prompt string."}))
+
+(.addMethod execute :llm-request
+            (with-meta
+              (fn [{:keys [prompt estimated-tokens complexity callback-event]}
+                   {:keys [router-chan cell-in-chan]}]
+                (let [reply-chan (a/chan 1)]
+                  (a/put! router-chan {:type :evaluate
+                                       :prompt prompt
+                                       :estimated-tokens estimated-tokens
+                                       :complexity complexity
+                                       :reply-chan reply-chan})
+                  (a/go
+                    (let [response (a/<! reply-chan)]
+                      (if (or (= (:status response) :error) (:error response))
+                        (a/>! cell-in-chan [:observation {:type :evaluation-error
+                                                          :reason (:reason response)}])
+                        (a/>! cell-in-chan [:observation {:type callback-event
+                                                          :response (:response response)}]))))))
+              {:doc "Sends an LLM request to the router and returns the observation to the cell's input channel."}))
 
 (def sci-ctx
   "A sandboxed SCI environment exposing mealy.action.core/execute

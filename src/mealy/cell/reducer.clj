@@ -29,10 +29,11 @@
               {:state new-state
                :commands [reflex-match]}
               {:state (assoc new-state :phase :evaluating)
-               :commands [{:type :llm-request
-                           :prompt (prompt/compile-prompt new-state)
-                           :complexity :high
-                           :callback-event :consent-evaluated}]}))
+               :commands [{:type :execute-action
+                           :action {:type :llm-request
+                                    :prompt (prompt/compile-prompt new-state)
+                                    :complexity :high
+                                    :callback-event :consent-evaluated}}]}))
           {:state new-state
            :commands []}))
 
@@ -48,10 +49,11 @@
       (let [code (:code event-data)
             new-state (update-in state [:memory :proposed-policies] (fnil conj []) code)]
         {:state (assoc new-state :phase :evaluating)
-         :commands [{:type :llm-request
-                     :prompt (prompt/compile-prompt new-state)
-                     :complexity :high
-                     :callback-event :policy-consent-evaluated}]})
+         :commands [{:type :execute-action
+                     :action {:type :llm-request
+                              :prompt (prompt/compile-prompt new-state)
+                              :complexity :high
+                              :callback-event :policy-consent-evaluated}}]})
 
       :policy-consent-evaluated
       (let [{:keys [consent]} (parse-consent (:response event-data))
