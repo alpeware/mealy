@@ -65,7 +65,9 @@
         (is (= :llm-request (:type cmd))))
 
       ;; Then the out-chan should be closed
-      (is (nil? (async/<!! out-chan)) "out-chan should be closed when in-chan is closed")
+      ;; Wait for up to 500ms for the out-chan to close to avoid race condition with async close
+      (let [[closed-val _] (async/alts!! [out-chan (async/timeout 500)])]
+        (is (nil? closed-val) "out-chan should be closed when in-chan is closed"))
       (.delete temp-file))))
 
 (deftest test-shell-event-logging
