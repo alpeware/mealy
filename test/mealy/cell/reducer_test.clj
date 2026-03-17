@@ -36,6 +36,18 @@
       (is (= :high (:complexity (first commands))))
       (is (= :consent-evaluated (:callback-event (first commands)))))))
 
+(deftest test-handle-observation-reflex
+  (testing "[:observation data] matching a reflex yields the reflex command and remains :idle"
+    (let [c (cell/make-cell "Survive" {:reflexes {:cpu-temp-high {:type :throttle-cpu}}})
+          event [:observation {:type :cpu-temp-high :value 95}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          commands (:commands result)]
+      (is (= [{:type :cpu-temp-high :value 95}] (:observations new-state)))
+      (is (= :idle (:phase new-state)))
+      (is (= 1 (count commands)))
+      (is (= :throttle-cpu (:type (first commands)))))))
+
 (deftest test-handle-observation-not-idle
   (testing "[:observation data] event while not :idle buffers observation but yields no commands"
     (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)

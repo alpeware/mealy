@@ -22,11 +22,17 @@
       :observation
       (let [new-state (update state :observations conj event-data)]
         (if (= (:phase new-state) :idle)
-          {:state (assoc new-state :phase :evaluating)
-           :commands [{:type :llm-request
-                       :prompt (prompt/compile-prompt new-state)
-                       :complexity :high
-                       :callback-event :consent-evaluated}]}
+          (let [reflexes (get-in state [:memory :reflexes])
+                reflex-match (or (get reflexes (:type event-data))
+                                 (get reflexes event-data))]
+            (if reflex-match
+              {:state new-state
+               :commands [reflex-match]}
+              {:state (assoc new-state :phase :evaluating)
+               :commands [{:type :llm-request
+                           :prompt (prompt/compile-prompt new-state)
+                           :complexity :high
+                           :callback-event :consent-evaluated}]}))
           {:state new-state
            :commands []}))
 
