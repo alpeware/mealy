@@ -50,7 +50,7 @@
               (fn [{:keys [code]} {:keys [cell-in-chan]}]
                 (try
                   (let [result (sci/eval-string* sci-ctx code)]
-                    (a/put! cell-in-chan [:observation {:type :eval-success :result result}]))
+                    (a/put! cell-in-chan [:observation {:type :eval-success :result result :code code}]))
                   (catch Exception e
                     (a/put! cell-in-chan [:observation {:type :eval-error :error (.getMessage e)}]))))
               {:doc "Evaluates sandboxed Clojure code dynamically for skill acquisition."}))

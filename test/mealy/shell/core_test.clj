@@ -260,4 +260,27 @@
 
         (is (= [{:temp 98.6}] (:observations restored-state))))
 
+      (.delete temp-snap)))
+
+  (testing "restore-cell rehydrates the dynamic multimethod registry from active-policies"
+    (let [initial-state (cell/make-cell "Aim" {:active-policies ["(require '[mealy.action.core :as action])\n(defmethod action/execute :rehydrated-skill [_ env] :success)"]})
+          temp-log (java.io.File/createTempFile "events-empty" ".log")
+          temp-snap (java.io.File/createTempFile "snapshot" ".nippy")
+          log-path (.getAbsolutePath temp-log)
+          snap-path (.getAbsolutePath temp-snap)]
+
+      (nippy/freeze-to-file snap-path {:state initial-state :event-count 0})
+      (spit log-path "") ;; empty log
+
+      (shell/restore-cell initial-state
+                          {:snapshot-path snap-path
+                           :event-log-path log-path})
+
+      (let [methods (methods mealy.action.core/execute)]
+        (is (contains? methods :rehydrated-skill) "The :rehydrated-skill method should have been evaluated and registered")
+        (when (contains? methods :rehydrated-skill)
+          (is (= :success (mealy.action.core/execute {:type :rehydrated-skill} {})) "The registered method should be executable")
+          (remove-method mealy.action.core/execute :rehydrated-skill)))
+
+      (.delete temp-log)
       (.delete temp-snap))))

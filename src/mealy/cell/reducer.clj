@@ -20,7 +20,11 @@
   (let [[event-type event-data] event]
     (case event-type
       :observation
-      (let [new-state (update state :observations conj event-data)]
+      (let [state-with-obs (update state :observations conj event-data)
+            new-state (if (and (= (:type event-data) :eval-success)
+                               (:code event-data))
+                        (update-in state-with-obs [:memory :active-policies] (fnil conj []) (:code event-data))
+                        state-with-obs)]
         (if (= (:phase new-state) :idle)
           (let [reflexes (get-in state [:memory :reflexes])
                 reflex-match (or (get reflexes (:type event-data))
