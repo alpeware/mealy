@@ -118,3 +118,41 @@
                 (let [result (reducer/parse-consent response)]
                   (and (false? (:consent result))
                        (= response (:response result))))))
+
+(deftest test-handle-propose-policy
+  (testing "[:propose-policy data] event while :idle appends code to state's memory :proposed-policies, transitions to :evaluating, and yields a :llm-request command"
+    (let [c (cell/make-cell "Survive" {})
+          event [:propose-policy {:code "(defmethod execute :new-skill ...)"}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          commands (:commands result)]
+      (is (= ["(defmethod execute :new-skill ...)"] (get-in new-state [:memory :proposed-policies])))
+      (is (= :evaluating (:phase new-state)))
+      (is (= 1 (count commands)))
+      (is (= :llm-request (:type (first commands))))
+      (is (= :high (:complexity (first commands))))
+      (is (= :policy-consent-evaluated (:callback-event (first commands)))))))
+
+(deftest test-handle-policy-consent-evaluated-positive
+  (testing "[:policy-consent-evaluated data] with positive consent transitions to :acting, pops the policy, and yields an :execute-action command for :eval"
+    (let [c (assoc (cell/make-cell "Survive" {:proposed-policies ["(defmethod execute :new-skill ...)"]}) :phase :evaluating)
+          event [:policy-consent-evaluated {:response "I CONSENT to this policy"}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          commands (:commands result)]
+      (is (= :acting (:phase new-state)))
+      (is (= [] (get-in new-state [:memory :proposed-policies])))
+      (is (= 1 (count commands)))
+      (is (= :execute-action (:type (first commands))))
+      (is (= {:type :eval :code "(defmethod execute :new-skill ...)"} (:action (first commands)))))))
+
+(deftest test-handle-policy-consent-evaluated-objection
+  (testing "[:policy-consent-evaluated data] with objection transitions to :idle, pops the policy, and yields no commands"
+    (let [c (assoc (cell/make-cell "Survive" {:proposed-policies ["(defmethod execute :new-skill ...)"]}) :phase :evaluating)
+          event [:policy-consent-evaluated {:response "I have an OBJECTION to this policy"}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          commands (:commands result)]
+      (is (= :idle (:phase new-state)))
+      (is (= [] (get-in new-state [:memory :proposed-policies])))
+      (is (empty? commands)))))
