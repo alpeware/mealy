@@ -99,6 +99,8 @@
           log-path (.getAbsolutePath temp-log)
           snap-path (.getAbsolutePath temp-snap)]
 
+      (.delete temp-snap)
+
       (shell/start-shell initial-state in-chan out-chan
                          {:event-log-path log-path
                           :snapshot-path snap-path
@@ -127,10 +129,90 @@
 
         ;; Verify the state can be thawed and represents the final state
         ;; The reducer adds both observations
-        (let [thawed-state (nippy/thaw-from-file snap-path)]
+        (let [thawed-snapshot (nippy/thaw-from-file snap-path)
+              thawed-state (:state thawed-snapshot)
+              event-count (:event-count thawed-snapshot)]
+          (is (= 2 event-count))
           (is (= "Aim" (:aim thawed-state)))
           (is (= 2 (count (:observations thawed-state))))
           (is (= [{:temp 98.6} {:temp 99.1}] (:observations thawed-state)))))
 
       (.delete temp-log)
+      (.delete temp-snap))))
+
+(deftest test-restore-cell
+  (testing "restore-cell recovers state from snapshot and event log"
+    (let [initial-state (cell/make-cell "Aim" {})
+          temp-log (java.io.File/createTempFile "events" ".log")
+          temp-snap (java.io.File/createTempFile "snapshot" ".nippy")
+          log-path (.getAbsolutePath temp-log)
+          snap-path (.getAbsolutePath temp-snap)]
+
+      ;; Step 1: Create a base snapshot at event count 1
+      (let [state-at-1 (-> initial-state
+                           (assoc :phase :evaluating)
+                           (assoc :observations [{:temp 98.6}]))]
+        (nippy/freeze-to-file snap-path {:state state-at-1 :event-count 1}))
+
+      ;; Step 2: Write events to the log
+      ;; The first event was already captured in the snapshot.
+      (spit log-path (str (pr-str [:observation {:temp 98.6}]) "\n") :append true)
+      ;; The next two events occurred AFTER the snapshot was taken.
+      (spit log-path (str (pr-str [:observation {:temp 99.1}]) "\n") :append true)
+      (spit log-path (str (pr-str [:evaluation-error {:reason "timeout"}]) "\n") :append true)
+
+      ;; Step 3: Call restore-cell
+      (let [restored-state (shell/restore-cell initial-state
+                                               {:snapshot-path snap-path
+                                                :event-log-path log-path})]
+
+        ;; The state should have the second observation and the last error.
+        (is (= "Aim" (:aim restored-state)))
+        (is (= :idle (:phase restored-state)))
+        (is (= "timeout" (:last-error restored-state)))
+        (is (= [{:temp 98.6} {:temp 99.1}] (:observations restored-state))))
+
+      (.delete temp-log)
+      (.delete temp-snap)))
+
+  (testing "restore-cell works with missing snapshot (replays from beginning)"
+    (let [initial-state (cell/make-cell "Aim" {})
+          temp-log (java.io.File/createTempFile "events" ".log")
+          temp-snap (java.io.File/createTempFile "snapshot-missing" ".nippy")
+          log-path (.getAbsolutePath temp-log)
+          snap-path (.getAbsolutePath temp-snap)]
+
+      (spit log-path (str (pr-str [:observation {:temp 98.6}]) "\n") :append true)
+      (spit log-path (str (pr-str [:observation {:temp 99.1}]) "\n") :append true)
+
+      (.delete temp-snap) ; ensure it doesn't exist
+
+      (let [restored-state (shell/restore-cell initial-state
+                                               {:snapshot-path snap-path
+                                                :event-log-path log-path})]
+
+        (is (= [{:temp 98.6} {:temp 99.1}] (:observations restored-state))))
+
+      (.delete temp-log)))
+
+  (testing "restore-cell works with missing event log"
+    (let [initial-state (cell/make-cell "Aim" {})
+          temp-log (java.io.File/createTempFile "events-missing" ".log")
+          temp-snap (java.io.File/createTempFile "snapshot" ".nippy")
+          log-path (.getAbsolutePath temp-log)
+          snap-path (.getAbsolutePath temp-snap)]
+
+      (let [state-at-1 (-> initial-state
+                           (assoc :phase :evaluating)
+                           (assoc :observations [{:temp 98.6}]))]
+        (nippy/freeze-to-file snap-path {:state state-at-1 :event-count 1}))
+
+      (.delete temp-log) ; ensure it doesn't exist
+
+      (let [restored-state (shell/restore-cell initial-state
+                                               {:snapshot-path snap-path
+                                                :event-log-path log-path})]
+
+        (is (= [{:temp 98.6}] (:observations restored-state))))
+
       (.delete temp-snap))))

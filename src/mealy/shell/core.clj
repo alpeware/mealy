@@ -3,8 +3,37 @@
 (ns mealy.shell.core
   "The execution shell for Mealy cells. Adapts the pure Sans-IO core to core.async channels."
   (:require [clojure.core.async :as async :refer [go-loop <! >!]]
+            [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [mealy.cell.reducer :as reducer]
             [taoensso.nippy :as nippy]))
+
+(defn restore-cell
+  "Bootloader crash recovery routine.
+  Reads the latest snapshot (if it exists) to obtain a base state and an event count `N`.
+  Then reads `events.log`, skips the first `N` lines, and replays the remaining events
+  through the pure `reducer/handle-event` to perfectly reconstruct the state.
+  Returns the reconstructed state map."
+  [initial-state opts]
+  (let [log-path (:event-log-path opts "events.log")
+        snapshot-path (:snapshot-path opts "snapshot.nippy")
+        snap-file (io/file snapshot-path)
+        log-file (io/file log-path)
+        snapshot-exists? (.exists snap-file)
+        {base-state :state
+         event-count :event-count} (if snapshot-exists?
+                                     (nippy/thaw-from-file snapshot-path)
+                                     {:state initial-state :event-count 0})]
+    (if (.exists log-file)
+      (with-open [r (io/reader log-file)]
+        (let [lines (line-seq r)
+              remaining-lines (drop event-count lines)
+              events (map edn/read-string remaining-lines)]
+          (reduce (fn [s e]
+                    (:state (reducer/handle-event s e)))
+                  base-state
+                  events)))
+      base-state)))
 
 (defn start-shell
   "Spawns a go-loop that consumes events from `in-chan`, processes them
@@ -26,7 +55,7 @@
 
            (when (and snapshot-interval
                       (zero? (mod new-count snapshot-interval)))
-             (<! (async/thread (nippy/freeze-to-file snapshot-path state))))
+             (<! (async/thread (nippy/freeze-to-file snapshot-path {:state state :event-count new-count}))))
 
            (doseq [cmd commands]
              (>! out-chan cmd))
