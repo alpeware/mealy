@@ -8,6 +8,7 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [mealy.action.core :as action]
             [mealy.cell.core :as cell]
             [mealy.shell.core :as shell]
             [taoensso.nippy :as nippy]))
@@ -139,6 +140,44 @@
 
       (.delete temp-log)
       (.delete temp-snap))))
+
+(deftest test-unified-worker-pool
+  (testing "start-shell initializes a generic worker pool that consumes from out-chan and calls execute"
+    (let [initial-state (cell/make-cell "Aim" {})
+          in-chan (async/chan 10)
+          out-chan (async/chan 10)
+          temp-log (java.io.File/createTempFile "events" ".log")
+          log-path (.getAbsolutePath temp-log)
+          execution-chan (async/chan 10)
+
+          ;; Register a test action
+          _ (defmethod mealy.action.core/execute :test-action
+              [action env]
+              (async/put! execution-chan {:action action :env env}))]
+
+      (shell/start-shell initial-state in-chan out-chan
+                         {:event-log-path log-path
+                          :workers 2
+                          :gateway-chan "mock-gateway"
+                          :cell-in-chan "mock-cell-in"})
+
+      ;; Send an :execute-action command directly to out-chan (simulating reducer output)
+      (async/>!! out-chan {:type :execute-action
+                           :action {:type :test-action
+                                    :payload "hello"}})
+
+      ;; The worker pool should pull this command, see it's an :execute-action,
+      ;; and dispatch it to mealy.action.core/execute. Our mock will put it on execution-chan.
+      (let [[result _] (async/alts!! [execution-chan (async/timeout 1000)])]
+        (is (not (nil? result)) "Worker pool should have executed the action")
+        (is (= :test-action (-> result :action :type)))
+        (is (= "hello" (-> result :action :payload)))
+        (is (= "mock-gateway" (-> result :env :gateway-chan)))
+        (is (= "mock-cell-in" (-> result :env :cell-in-chan))))
+
+      (remove-method mealy.action.core/execute :test-action)
+      (async/close! in-chan)
+      (.delete temp-log))))
 
 (deftest test-restore-cell
   (testing "restore-cell recovers state from snapshot and event log"

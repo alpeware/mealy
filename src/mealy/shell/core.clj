@@ -5,8 +5,20 @@
   (:require [clojure.core.async :as async :refer [go-loop <! >!]]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [mealy.action.core :as action]
             [mealy.cell.reducer :as reducer]
             [taoensso.nippy :as nippy]))
+
+(defn- start-worker-pool
+  "Starts a generic worker pool to drain `out-chan` and execute actions via `mealy.action.core/execute`."
+  [out-chan opts]
+  (let [num-workers (:workers opts 4)]
+    (dotimes [_ num-workers]
+      (go-loop []
+        (when-let [cmd (<! out-chan)]
+          (when (= (:type cmd) :execute-action)
+            (action/execute (:action cmd) opts))
+          (recur))))))
 
 (defn restore-cell
   "Bootloader crash recovery routine.
@@ -46,6 +58,9 @@
    (let [log-path (:event-log-path opts "events.log")
          snapshot-interval (:snapshot-interval opts)
          snapshot-path (:snapshot-path opts "snapshot.nippy")]
+
+     (start-worker-pool out-chan opts)
+
      (go-loop [state initial-state
                event-count 0]
        (if-let [event (<! in-chan)]
