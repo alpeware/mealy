@@ -41,6 +41,17 @@
       (is (str/includes? result ":calculation 3"))
       (is (str/includes? result "Consent-based LLM evaluation")))))
 
+(deftest compile-prompt-tools-test
+  (testing "Compilation includes dynamic tool awareness"
+    (let [state {:aim "To be self-aware"
+                 :memory {}
+                 :observations []}
+          result (prompt/compile-prompt state)]
+      (is (string? result))
+      (is (str/includes? result "Available Tools:"))
+      (is (str/includes? result ":think"))
+      (is (str/includes? result ":eval")))))
+
 (defspec ^{:doc "test-compile-prompt-returns-string"} compile-prompt-returns-string 100
   (prop/for-all [state gen-state]
                 (let [result (prompt/compile-prompt state)]
