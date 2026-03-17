@@ -64,7 +64,8 @@
       ;; We expect the command from the phase transition
       (let [[cmd _] (async/alts!! [out-chan (async/timeout 1000)])]
         (is (not (nil? cmd)) "Should yield a command for observation in idle phase")
-        (is (= :llm-request (:type cmd))))
+        (is (= :execute-action (:type cmd)))
+        (is (= :llm-request (:type (:action cmd)))))
 
       ;; Then the out-chan should be closed
       ;; Wait for up to 500ms for the out-chan to close to avoid race condition with async close

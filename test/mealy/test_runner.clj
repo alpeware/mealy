@@ -8,7 +8,6 @@
             [mealy.core]
             [mealy.intelligence.adapters.gemini-test]
             [mealy.intelligence.adapters.llama-test]
-            [mealy.intelligence.gateway-test]
             [mealy.intelligence.integration-test]
             [mealy.intelligence.provider-test]
             [mealy.intelligence.router-test]
