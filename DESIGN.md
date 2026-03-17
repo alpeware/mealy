@@ -53,3 +53,30 @@ Because we are dropping `core.async.flow`, the library must provide a standard e
 * **Egress (`:out-chan`):** The loop takes the `[:commands ...]` returned by the pure reducer and routes them.
 * Commands targeting other Cells are placed on the respective double-linked channels.
 * Commands targeting the real world (e.g., executing a trade, calling an LLM API) are routed to specialized, dumb **IO Actuator** queues.
+
+## 7. Intelligence Routing & Token Economics
+
+To decouple the pure Mealy machine from specific LLM vendors, the system implements an Intelligence Routing layer:
+
+* **Provider Actors:** Stateful `go-loop` components (`mealy.intelligence.provider`) wrap specific LLM APIs (e.g., Gemini, Llama) or local models using non-blocking async HTTP (`hato`). They maintain internal state for token budgets, rate limits, and backoff statuses.
+* **Intelligence Router:** A multiplexing `go-loop` (`mealy.intelligence.router`) that sits between the Cells and the Providers. It receives `evaluate-prompt` commands, inspects the current health, token budgets, and capabilities of all registered Provider Actors, and routes the prompt to the most economically optimal model based on the Cell's required complexity.
+* **Generic Intelligence Gateway:** A pure IO boundary (`mealy.intelligence.gateway`) that blindly forwards `{:type :llm-request}` commands to the Router, and wraps the raw string response back into the Cell as an `[:observation ...]` event.
+
+## 8. Von Neumann Action Registry & Extensibility
+
+The agent's execution layer implements a Von Neumann architecture for runtime self-modification.
+
+* **The Execution Router:** A central, extensible shell-side action registry built on a Clojure `defmulti` (`mealy.action.core/execute`). It dispatches based on the `:type` of the action map.
+* **Cognitive Delegation:** The baseline `:think` action pushes standard LLM requests back to the Intelligence Gateway, allowing the agent to delegate arbitrary cognitive subtasks.
+* **Dynamic Skill Acquisition:** The `:eval` action extracts a `:code` string and evaluates it using a sandboxed `sci` (Small Clojure Interpreter) environment. The sandbox exposes the `execute` multimethod, allowing the agent to dynamically write, evaluate, and inject new `defmethod` execution paths (with side effects) into its own runtime registry.
+
+## 9. Event Sourcing, Persistence & Cognitive Reflexes
+
+To ensure crash-fault tolerance and predictable high-speed operation, the pure Cell utilizes Event Sourcing and Reflexes.
+
+* **Append-Only Event Log:** Before passing an incoming event to the pure reducer, the IO shell appends the raw event to a persistent `events.log` on disk.
+* **Nippy Snapshots:** Periodically, the IO shell serializes the entire pure `state` map to disk using `taoensso.nippy`.
+* **The Bootloader:** Upon booting, the system locates the latest Nippy snapshot, deserializes it, and replays only the events appended *after* the snapshot timestamp to perfectly reconstruct the Cell's exact state.
+* **Dynamic Tool Awareness:** The `mealy.ooda.prompt` compiler dynamically inspects the `mealy.action.core/execute` registry to inject the current list of available tools (and their metadata/docstrings) directly into the LLM prompt, giving the agent physical self-awareness of its evolving capabilities.
+* **Autonomic Reflexes:** The Cell's Memory can contain a `:reflexes` map. When a known observation arrives, the pure reducer checks this map before transitioning to the LLM. If matched, it instantly yields the mapped command (e.g., `{:throttle-cpu true}`) bypassing the LLM completely for deterministic, zero-latency reactions.
+* **Policy Proposals:** The `[:propose-policy]` action buffers proposed Clojure code in the state. This requires a committee consent evaluation via the LLM before the code is routed to the `:eval` action sink.
