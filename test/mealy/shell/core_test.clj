@@ -9,7 +9,8 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [mealy.cell.core :as cell]
-            [mealy.shell.core :as shell]))
+            [mealy.shell.core :as shell]
+            [taoensso.nippy :as nippy]))
 
 (defspec ^{:doc "Generative invariant: The execution shell processes events sequentially and stops when in-chan closes."}
   test-shell-processing-invariant 50
@@ -87,3 +88,49 @@
         (is (= "[:observation {:temp 98.6}]" (first lines)))
         (is (= "[:observation {:temp 99.1}]" (second lines))))
       (.delete temp-file))))
+
+(deftest test-shell-state-snapshots
+  (testing "Shell periodically serializes the state map to a Nippy snapshot"
+    (let [initial-state (cell/make-cell "Aim" {})
+          in-chan (async/chan 10)
+          out-chan (async/chan 10)
+          temp-log (java.io.File/createTempFile "events" ".log")
+          temp-snap (java.io.File/createTempFile "snapshot" ".nippy")
+          log-path (.getAbsolutePath temp-log)
+          snap-path (.getAbsolutePath temp-snap)]
+
+      (shell/start-shell initial-state in-chan out-chan
+                         {:event-log-path log-path
+                          :snapshot-path snap-path
+                          :snapshot-interval 2})
+
+      ;; Send exactly snapshot-interval events to trigger one snapshot write
+      (async/>!! in-chan [:observation {:temp 98.6}])
+      ;; Wait to ensure the go-loop processes the first event
+      (async/<!! (async/timeout 50))
+
+      (async/>!! in-chan [:observation {:temp 99.1}])
+
+      ;; Give shell time to process the second event and write the snapshot
+      (async/<!! (async/timeout 200))
+
+      (async/close! in-chan)
+
+      (loop []
+        (when-let [_ (async/<!! out-chan)]
+          (recur)))
+
+      ;; Now check if a valid Nippy snapshot was created
+      (let [snap-file (io/file snap-path)]
+        (is (.exists snap-file) "Snapshot file should exist")
+        (is (> (.length snap-file) 0) "Snapshot file should not be empty")
+
+        ;; Verify the state can be thawed and represents the final state
+        ;; The reducer adds both observations
+        (let [thawed-state (nippy/thaw-from-file snap-path)]
+          (is (= "Aim" (:aim thawed-state)))
+          (is (= 2 (count (:observations thawed-state))))
+          (is (= [{:temp 98.6} {:temp 99.1}] (:observations thawed-state)))))
+
+      (.delete temp-log)
+      (.delete temp-snap))))
