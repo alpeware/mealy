@@ -44,6 +44,29 @@
           {:state (assoc state :phase :idle)
            :commands []}))
 
+      :propose-policy
+      (let [code (:code event-data)
+            new-state (update-in state [:memory :proposed-policies] (fnil conj []) code)]
+        {:state (assoc new-state :phase :evaluating)
+         :commands [{:type :llm-request
+                     :prompt (prompt/compile-prompt new-state)
+                     :complexity :high
+                     :callback-event :policy-consent-evaluated}]})
+
+      :policy-consent-evaluated
+      (let [{:keys [consent]} (parse-consent (:response event-data))
+            policies (get-in state [:memory :proposed-policies] [])
+            policy (first policies)
+            rem-policies (vec (rest policies))
+            new-state (assoc-in state [:memory :proposed-policies] rem-policies)]
+        (if consent
+          {:state (assoc new-state :phase :acting)
+           :commands [{:type :execute-action
+                       :action {:type :eval
+                                :code policy}}]}
+          {:state (assoc new-state :phase :idle)
+           :commands []}))
+
       :evaluation-error
       {:state (-> state
                   (assoc :phase :idle)
