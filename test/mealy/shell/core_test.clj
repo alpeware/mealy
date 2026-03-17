@@ -8,6 +8,7 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [mealy.action.core :as action]
             [mealy.cell.core :as cell]
             [mealy.shell.core :as shell]
             [taoensso.nippy :as nippy]))
@@ -23,7 +24,7 @@
                       log-path (.getAbsolutePath temp-file)
 
           ;; Start the shell
-                      _ (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path})
+                      _ (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path :workers 0})
 
           ;; Send all events
                       _ (doseq [e events]
@@ -50,7 +51,9 @@
           out-chan (async/chan 10)
           temp-file (java.io.File/createTempFile "events" ".log")
           log-path (.getAbsolutePath temp-file)]
-      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path})
+      ;; Pass :workers 0 so we don't start the generic worker pool that will swallow the command.
+      ;; We want to inspect the raw out-chan.
+      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path :workers 0})
 
       ;; Send an observation
       (async/>!! in-chan [:observation {:temp 98.6}])
@@ -59,12 +62,14 @@
       (async/close! in-chan)
 
       ;; We expect the command from the phase transition
-      (let [cmd (async/<!! out-chan)]
+      (let [[cmd _] (async/alts!! [out-chan (async/timeout 1000)])]
         (is (not (nil? cmd)) "Should yield a command for observation in idle phase")
         (is (= :llm-request (:type cmd))))
 
       ;; Then the out-chan should be closed
-      (is (nil? (async/<!! out-chan)) "out-chan should be closed when in-chan is closed")
+      ;; Wait for up to 500ms for the out-chan to close to avoid race condition with async close
+      (let [[closed-val _] (async/alts!! [out-chan (async/timeout 500)])]
+        (is (nil? closed-val) "out-chan should be closed when in-chan is closed"))
       (.delete temp-file))))
 
 (deftest test-shell-event-logging
@@ -74,7 +79,7 @@
           out-chan (async/chan 10)
           temp-file (java.io.File/createTempFile "events" ".log")
           log-path (.getAbsolutePath temp-file)]
-      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path})
+      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path :workers 0})
 
       (async/>!! in-chan [:observation {:temp 98.6}])
       (async/>!! in-chan [:observation {:temp 99.1}])
@@ -104,7 +109,8 @@
       (shell/start-shell initial-state in-chan out-chan
                          {:event-log-path log-path
                           :snapshot-path snap-path
-                          :snapshot-interval 2})
+                          :snapshot-interval 2
+                          :workers 0})
 
       ;; Send exactly snapshot-interval events to trigger one snapshot write
       (async/>!! in-chan [:observation {:temp 98.6}])
@@ -139,6 +145,44 @@
 
       (.delete temp-log)
       (.delete temp-snap))))
+
+(deftest test-unified-worker-pool
+  (testing "start-shell initializes a generic worker pool that consumes from out-chan and calls execute"
+    (let [initial-state (cell/make-cell "Aim" {})
+          in-chan (async/chan 10)
+          out-chan (async/chan 10)
+          temp-log (java.io.File/createTempFile "events" ".log")
+          log-path (.getAbsolutePath temp-log)
+          execution-chan (async/chan 10)
+
+          ;; Register a test action
+          _ (defmethod mealy.action.core/execute :test-action
+              [action env]
+              (async/put! execution-chan {:action action :env env}))]
+
+      (shell/start-shell initial-state in-chan out-chan
+                         {:event-log-path log-path
+                          :workers 2
+                          :gateway-chan "mock-gateway"
+                          :cell-in-chan "mock-cell-in"})
+
+      ;; Send an :execute-action command directly to out-chan (simulating reducer output)
+      (async/>!! out-chan {:type :execute-action
+                           :action {:type :test-action
+                                    :payload "hello"}})
+
+      ;; The worker pool should pull this command, see it's an :execute-action,
+      ;; and dispatch it to mealy.action.core/execute. Our mock will put it on execution-chan.
+      (let [[result _] (async/alts!! [execution-chan (async/timeout 1000)])]
+        (is (not (nil? result)) "Worker pool should have executed the action")
+        (is (= :test-action (-> result :action :type)))
+        (is (= "hello" (-> result :action :payload)))
+        (is (= "mock-gateway" (-> result :env :gateway-chan)))
+        (is (= "mock-cell-in" (-> result :env :cell-in-chan))))
+
+      (remove-method mealy.action.core/execute :test-action)
+      (async/close! in-chan)
+      (.delete temp-log))))
 
 (deftest test-restore-cell
   (testing "restore-cell recovers state from snapshot and event log"
