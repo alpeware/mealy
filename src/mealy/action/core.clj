@@ -11,11 +11,13 @@
   (fn [action _env]
     (:type action)))
 
-(defmethod execute :think
-  [{:keys [prompt]} {:keys [gateway-chan]}]
-  (a/put! gateway-chan {:type :llm-request
-                        :prompt prompt
-                        :callback-event :thought-result}))
+(.addMethod execute :think
+            (with-meta
+              (fn [{:keys [prompt]} {:keys [gateway-chan]}]
+                (a/put! gateway-chan {:type :llm-request
+                                      :prompt prompt
+                                      :callback-event :thought-result}))
+              {:doc "Delegates a cognitive task to the LLM. Expects a :prompt string."}))
 
 (def sci-ctx
   "A sandboxed SCI environment exposing mealy.action.core/execute
@@ -23,10 +25,12 @@
   (sci/init {:namespaces {'mealy.action.core {'execute execute}
                           'clojure.core.async {'put! a/put!}}}))
 
-(defmethod execute :eval
-  [{:keys [code]} {:keys [cell-in-chan]}]
-  (try
-    (let [result (sci/eval-string* sci-ctx code)]
-      (a/put! cell-in-chan [:observation {:type :eval-success :result result}]))
-    (catch Exception e
-      (a/put! cell-in-chan [:observation {:type :eval-error :error (.getMessage e)}]))))
+(.addMethod execute :eval
+            (with-meta
+              (fn [{:keys [code]} {:keys [cell-in-chan]}]
+                (try
+                  (let [result (sci/eval-string* sci-ctx code)]
+                    (a/put! cell-in-chan [:observation {:type :eval-success :result result}]))
+                  (catch Exception e
+                    (a/put! cell-in-chan [:observation {:type :eval-error :error (.getMessage e)}]))))
+              {:doc "Evaluates sandboxed Clojure code dynamically for skill acquisition."}))
