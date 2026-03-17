@@ -36,7 +36,7 @@
       (action/execute action env)
       (let [[val port] (a/alts!! [in-chan (a/timeout 100)])]
         (is (= in-chan port) "A value should be put on the cell-in-chan")
-        (is (= [:observation {:type :eval-success :result 3}] val) "The correct observation should be constructed and sent")))))
+        (is (= [:observation {:type :eval-success :result 3 :code "(+ 1 2)"}] val) "The correct observation should be constructed and sent")))))
 
 (deftest test-eval-action-error
   (testing "the :eval action catches errors and returns error observation"

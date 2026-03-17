@@ -100,6 +100,14 @@
       (is (= c (:state result)))
       (is (= [] (:commands result))))))
 
+(deftest test-handle-eval-success-persists-policy
+  (testing "[:observation data] with :type :eval-success and :code appends code to state's active-policies"
+    (let [c (cell/make-cell "Survive" {})
+          event [:observation {:type :eval-success :result :ok :code "(defmethod execute :new-skill ...)"}]
+          result (reducer/handle-event c event)
+          new-state (:state result)]
+      (is (= ["(defmethod execute :new-skill ...)"] (get-in new-state [:memory :active-policies]))))))
+
 (def gen-consent-response
   "Generator for strings that should parse as consent."
   (gen/fmap (fn [s] (str "CONSENT: " s)) gen/string-alphanumeric))

@@ -7,6 +7,7 @@
             [clojure.java.io :as io]
             [mealy.action.core :as action]
             [mealy.cell.reducer :as reducer]
+            [sci.core :as sci]
             [taoensso.nippy :as nippy]))
 
 (defn- start-worker-pool
@@ -36,17 +37,18 @@
         {base-state :state
          event-count :event-count} (if snapshot-exists?
                                      (nippy/thaw-from-file snapshot-path)
-                                     {:state initial-state :event-count 0})]
-    (if (.exists log-file)
-      (with-open [r (io/reader log-file)]
-        (let [lines (line-seq r)
-              remaining-lines (drop event-count lines)
-              events (map edn/read-string remaining-lines)]
-          (reduce (fn [s e]
-                    (:state (reducer/handle-event s e)))
-                  base-state
-                  events)))
-      base-state)))
+                                     {:state initial-state :event-count 0})
+        final-state (if (.exists log-file)
+                      (with-open [r (io/reader log-file)]
+                        (reduce (fn [s e]
+                                  (:state (reducer/handle-event s e)))
+                                base-state
+                                (map edn/read-string (drop event-count (line-seq r)))))
+                      base-state)
+        active-policies (get-in final-state [:memory :active-policies] [])]
+    (doseq [policy active-policies]
+      (sci/eval-string* action/sci-ctx policy))
+    final-state))
 
 (defn start-shell
   "Spawns a go-loop that consumes events from `in-chan`, processes them
