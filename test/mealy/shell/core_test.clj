@@ -24,7 +24,7 @@
                       log-path (.getAbsolutePath temp-file)
 
           ;; Start the shell
-                      _ (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path})
+                      _ (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path :workers 0})
 
           ;; Send all events
                       _ (doseq [e events]
@@ -51,7 +51,9 @@
           out-chan (async/chan 10)
           temp-file (java.io.File/createTempFile "events" ".log")
           log-path (.getAbsolutePath temp-file)]
-      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path})
+      ;; Pass :workers 0 so we don't start the generic worker pool that will swallow the command.
+      ;; We want to inspect the raw out-chan.
+      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path :workers 0})
 
       ;; Send an observation
       (async/>!! in-chan [:observation {:temp 98.6}])
@@ -60,7 +62,7 @@
       (async/close! in-chan)
 
       ;; We expect the command from the phase transition
-      (let [cmd (async/<!! out-chan)]
+      (let [[cmd _] (async/alts!! [out-chan (async/timeout 1000)])]
         (is (not (nil? cmd)) "Should yield a command for observation in idle phase")
         (is (= :llm-request (:type cmd))))
 
@@ -77,7 +79,7 @@
           out-chan (async/chan 10)
           temp-file (java.io.File/createTempFile "events" ".log")
           log-path (.getAbsolutePath temp-file)]
-      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path})
+      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path :workers 0})
 
       (async/>!! in-chan [:observation {:temp 98.6}])
       (async/>!! in-chan [:observation {:temp 99.1}])
@@ -107,7 +109,8 @@
       (shell/start-shell initial-state in-chan out-chan
                          {:event-log-path log-path
                           :snapshot-path snap-path
-                          :snapshot-interval 2})
+                          :snapshot-interval 2
+                          :workers 0})
 
       ;; Send exactly snapshot-interval events to trigger one snapshot write
       (async/>!! in-chan [:observation {:temp 98.6}])
