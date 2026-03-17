@@ -3,6 +3,7 @@
 (ns mealy.shell.core-test
   "Tests for mealy.shell.core"
   (:require [clojure.core.async :as async]
+            [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
@@ -17,9 +18,11 @@
                 (let [initial-state (cell/make-cell aim {})
                       in-chan (async/chan 100)
                       out-chan (async/chan 100)
+                      temp-file (java.io.File/createTempFile "events" ".log")
+                      log-path (.getAbsolutePath temp-file)
 
           ;; Start the shell
-                      _ (shell/start-shell initial-state in-chan out-chan)
+                      _ (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path})
 
           ;; Send all events
                       _ (doseq [e events]
@@ -36,14 +39,17 @@
                       (recur (conj acc cmd))
                       (and (vector? acc)
                            ;; If we closed in-chan, the shell should close out-chan
-                           (nil? (async/<!! out-chan))))))))
+                           (nil? (async/<!! out-chan))
+                           (do (.delete temp-file) true)))))))
 
 (deftest test-shell-processing
   (testing "Shell processes valid events and closes out-chan when in-chan closes"
     (let [initial-state (cell/make-cell "Aim" {})
           in-chan (async/chan 10)
-          out-chan (async/chan 10)]
-      (shell/start-shell initial-state in-chan out-chan)
+          out-chan (async/chan 10)
+          temp-file (java.io.File/createTempFile "events" ".log")
+          log-path (.getAbsolutePath temp-file)]
+      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path})
 
       ;; Send an observation
       (async/>!! in-chan [:observation {:temp 98.6}])
@@ -57,4 +63,27 @@
         (is (= :llm-request (:type cmd))))
 
       ;; Then the out-chan should be closed
-      (is (nil? (async/<!! out-chan)) "out-chan should be closed when in-chan is closed"))))
+      (is (nil? (async/<!! out-chan)) "out-chan should be closed when in-chan is closed")
+      (.delete temp-file))))
+
+(deftest test-shell-event-logging
+  (testing "Shell appends events to the specified event log before processing"
+    (let [initial-state (cell/make-cell "Aim" {})
+          in-chan (async/chan 10)
+          out-chan (async/chan 10)
+          temp-file (java.io.File/createTempFile "events" ".log")
+          log-path (.getAbsolutePath temp-file)]
+      (shell/start-shell initial-state in-chan out-chan {:event-log-path log-path})
+
+      (async/>!! in-chan [:observation {:temp 98.6}])
+      (async/>!! in-chan [:observation {:temp 99.1}])
+      (async/close! in-chan)
+      (async/<!! out-chan) ; drain
+      (async/<!! out-chan) ; drain
+
+      (let [lines (with-open [r (io/reader log-path)]
+                    (doall (line-seq r)))]
+        (is (= 2 (count lines)))
+        (is (= "[:observation {:temp 98.6}]" (first lines)))
+        (is (= "[:observation {:temp 99.1}]" (second lines))))
+      (.delete temp-file))))
