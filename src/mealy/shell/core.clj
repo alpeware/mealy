@@ -10,6 +10,16 @@
             [sci.core :as sci]
             [taoensso.nippy :as nippy]))
 
+(defn sanitize-event
+  "Sanitizes an event for EDN serialization at the IO boundary.
+  Converts rich types in `:eval-success` observations into strings."
+  [[event-type event-data :as event]]
+  (if (and (= event-type :observation)
+           (= (:type event-data) :eval-success)
+           (contains? event-data :result))
+    [event-type (update event-data :result pr-str)]
+    event))
+
 (defn- start-worker-pool
   "Starts a generic worker pool to drain `out-chan` and execute actions via `mealy.action.core/execute`."
   [out-chan opts]
@@ -67,7 +77,7 @@
      (go-loop [state initial-state
                event-count 0]
        (if-let [event (<! in-chan)]
-         (let [_ (<! (async/thread (spit log-path (str (pr-str event) "\n") :append true)))
+         (let [_ (<! (async/thread (spit log-path (str (pr-str (sanitize-event event)) "\n") :append true)))
                {:keys [state commands]} (reducer/handle-event state event)
                new-count (inc event-count)]
 

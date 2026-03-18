@@ -95,6 +95,16 @@
         (is (= "[:observation {:temp 99.1}]" (second lines))))
       (.delete temp-file))))
 
+(deftest test-sanitize-event
+  (testing "Sanitizes :eval-success observation results into strings"
+    (let [event [:observation {:type :eval-success :result {:some "data"} :code "(some code)"}]
+          sanitized (shell/sanitize-event event)]
+      (is (= [:observation {:type :eval-success :result "{:some \"data\"}" :code "(some code)"}]
+             sanitized))))
+  (testing "Leaves other events untouched"
+    (let [event [:observation {:type :other-event :result {:some "data"}}]]
+      (is (= event (shell/sanitize-event event))))))
+
 (deftest test-shell-state-snapshots
   (testing "Shell periodically serializes the state map to a Nippy snapshot"
     (let [initial-state (cell/make-cell "Aim" {})
