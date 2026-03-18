@@ -74,9 +74,8 @@
       ;; Read the resulting observation from the cell's input channel
       (let [[observation port] (a/alts!! [cell-in-chan (a/timeout 100)])]
         (is (= cell-in-chan port))
-        (is (= :observation (first observation)))
+        (is (= :my-event (first observation)))
         (let [obs-data (second observation)]
-          (is (= :my-event (:type obs-data)))
           (is (= "some raw llm response" (:response obs-data))))))))
 
 (deftest test-llm-request-action-error
@@ -97,9 +96,8 @@
       ;; Read the resulting error observation from the cell's input channel
       (let [[observation port] (a/alts!! [cell-in-chan (a/timeout 100)])]
         (is (= cell-in-chan port))
-        (is (= :observation (first observation)))
+        (is (= :evaluation-error (first observation)))
         (let [obs-data (second observation)]
-          (is (= :evaluation-error (:type obs-data)))
           (is (= :no-available-provider (:reason obs-data))))))))
 
 (deftest test-von-neumann-self-modification

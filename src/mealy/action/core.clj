@@ -33,10 +33,8 @@
                   (a/go
                     (let [response (a/<! reply-chan)]
                       (if (or (= (:status response) :error) (:error response))
-                        (a/>! cell-in-chan [:observation {:type :evaluation-error
-                                                          :reason (:reason response)}])
-                        (a/>! cell-in-chan [:observation {:type callback-event
-                                                          :response (:response response)}]))))))
+                        (a/>! cell-in-chan [:evaluation-error {:reason (:reason response)}])
+                        (a/>! cell-in-chan [callback-event {:response (:response response)}]))))))
               {:doc "Sends an LLM request to the router and returns the observation to the cell's input channel."}))
 
 (def sci-ctx

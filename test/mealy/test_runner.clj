@@ -13,7 +13,8 @@
             [mealy.intelligence.router-test]
             [mealy.ooda.prompt-test]
             [mealy.shell.core-test]
-            [mealy.shell.topology-test]))
+            [mealy.shell.topology-test]
+            [mealy.sociocracy-integration-test]))
 
 (defn -main
   "Main entry point for running tests"
