@@ -13,70 +13,76 @@
     {:consent consent?
      :response response}))
 
-(defn handle-event
+(defmulti handle-event
   "Pure function that takes a cell state and an event, and returns a map
   containing the updated :state and a vector of :commands."
-  [state event]
-  (let [[event-type event-data] event]
-    (case event-type
-      :observation
-      (let [state-with-obs (update state :observations conj event-data)
-            new-state (if (and (= (:type event-data) :eval-success)
-                               (:code event-data))
-                        (update-in state-with-obs [:memory :active-policies] (fnil conj []) (:code event-data))
-                        state-with-obs)]
-        (if (= (:phase new-state) :idle)
-          (let [reflexes (get-in state [:memory :reflexes])
-                reflex-match (or (get reflexes (:type event-data))
-                                 (get reflexes event-data))]
-            (if reflex-match
-              {:state new-state
-               :commands [reflex-match]}
-              {:state (assoc new-state :phase :evaluating)
-               :commands [{:type :execute-action
-                           :action {:type :llm-request
-                                    :prompt (prompt/compile-prompt new-state)
-                                    :complexity :high
-                                    :callback-event :consent-evaluated}}]}))
+  (fn [_state [event-type _]] event-type))
+
+(defmethod handle-event :observation
+  [state [_ event-data]]
+  (let [state-with-obs (update state :observations conj event-data)
+        new-state (if (and (= (:type event-data) :eval-success)
+                           (:code event-data))
+                    (update-in state-with-obs [:memory :active-policies] (fnil conj []) (:code event-data))
+                    state-with-obs)]
+    (if (= (:phase new-state) :idle)
+      (let [reflexes (get-in state [:memory :reflexes])
+            reflex-match (or (get reflexes (:type event-data))
+                             (get reflexes event-data))]
+        (if reflex-match
           {:state new-state
-           :commands []}))
-
-      :consent-evaluated
-      (let [{:keys [consent]} (parse-consent (:response event-data))]
-        (if consent
-          {:state (assoc state :phase :acting)
-           :commands [{:type :execute-action}]}
-          {:state (assoc state :phase :idle)
-           :commands []}))
-
-      :propose-policy
-      (let [code (:code event-data)
-            new-state (update-in state [:memory :proposed-policies] (fnil conj []) code)]
-        {:state (assoc new-state :phase :evaluating)
-         :commands [{:type :execute-action
-                     :action {:type :llm-request
-                              :prompt (prompt/compile-prompt new-state)
-                              :complexity :high
-                              :callback-event :policy-consent-evaluated}}]})
-
-      :policy-consent-evaluated
-      (let [{:keys [consent]} (parse-consent (:response event-data))
-            policies (get-in state [:memory :proposed-policies] [])
-            policy (first policies)
-            rem-policies (vec (rest policies))
-            new-state (assoc-in state [:memory :proposed-policies] rem-policies)]
-        (if consent
-          {:state (assoc new-state :phase :acting)
+           :commands [reflex-match]}
+          {:state (assoc new-state :phase :evaluating)
            :commands [{:type :execute-action
-                       :action {:type :eval
-                                :code policy}}]}
-          {:state (assoc new-state :phase :idle)
-           :commands []}))
+                       :action {:type :llm-request
+                                :prompt (prompt/compile-prompt new-state)
+                                :complexity :high
+                                :callback-event :consent-evaluated}}]}))
+      {:state new-state
+       :commands []})))
 
-      :evaluation-error
-      {:state (-> state
-                  (assoc :phase :idle)
-                  (assoc :last-error (:reason event-data)))
-       :commands []}
+(defmethod handle-event :consent-evaluated
+  [state [_ event-data]]
+  (let [{:keys [consent]} (parse-consent (:response event-data))]
+    (if consent
+      {:state (assoc state :phase :acting)
+       :commands [{:type :execute-action}]}
+      {:state (assoc state :phase :idle)
+       :commands []})))
 
-      {:state state :commands []})))
+(defmethod handle-event :propose-policy
+  [state [_ event-data]]
+  (let [code (:code event-data)
+        new-state (update-in state [:memory :proposed-policies] (fnil conj []) code)]
+    {:state (assoc new-state :phase :evaluating)
+     :commands [{:type :execute-action
+                 :action {:type :llm-request
+                          :prompt (prompt/compile-prompt new-state)
+                          :complexity :high
+                          :callback-event :policy-consent-evaluated}}]}))
+
+(defmethod handle-event :policy-consent-evaluated
+  [state [_ event-data]]
+  (let [{:keys [consent]} (parse-consent (:response event-data))
+        policies (get-in state [:memory :proposed-policies] [])
+        policy (first policies)
+        rem-policies (vec (rest policies))
+        new-state (assoc-in state [:memory :proposed-policies] rem-policies)]
+    (if consent
+      {:state (assoc new-state :phase :acting)
+       :commands [{:type :execute-action
+                   :action {:type :eval
+                            :code policy}}]}
+      {:state (assoc new-state :phase :idle)
+       :commands []})))
+
+(defmethod handle-event :evaluation-error
+  [state [_ event-data]]
+  {:state (-> state
+              (assoc :phase :idle)
+              (assoc :last-error (:reason event-data)))
+   :commands []})
+
+(defmethod handle-event :default
+  [state _]
+  {:state state :commands []})

@@ -41,6 +41,7 @@
   "A sandboxed SCI environment exposing mealy.action.core/execute
   and clojure.core.async/put! for dynamic skill acquisition."
   (sci/init {:namespaces {'mealy.action.core {'execute execute}
+                          'mealy.cell.reducer {'handle-event @(requiring-resolve 'mealy.cell.reducer/handle-event)}
                           'clojure.core.async {'put! a/put!}}}))
 
 (.addMethod execute :eval

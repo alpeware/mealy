@@ -118,3 +118,16 @@
         (let [[val port] (a/alts!! [in-chan (a/timeout 100)])]
           (is (= in-chan port) "A value should be put on the cell-in-chan")
           (is (= [:observation {:type :new-skill-success}] val) "The new skill should execute successfully"))))))
+
+(deftest test-von-neumann-self-modification-reducer
+  (testing "the :eval action allows defining new defmethods for mealy.cell.reducer/handle-event"
+    (let [in-chan (a/chan 1)
+          code "(require '[mealy.cell.reducer :as reducer])\n(defmethod reducer/handle-event :new-event [s e] {:state s :commands []})"
+          eval-action {:type :eval :code code}
+          env {:cell-in-chan in-chan}]
+      (action/execute eval-action env)
+      (let [[val port] (a/alts!! [in-chan (a/timeout 100)])]
+        (is (= in-chan port) "A value should be put on the cell-in-chan")
+        (is (= :eval-success (:type (second val))) "The evaluation should be successful")
+        (when (= :eval-error (:type (second val)))
+          (println "Eval Error:" (:error (second val))))))))
