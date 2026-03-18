@@ -48,7 +48,7 @@
         ;; Wait for the result
         (let [[val port] (async/alts!! [cell-in-chan (async/timeout 1000)])]
           (is (= port cell-in-chan) "Did not receive response within 1000ms")
-          (is (= [:observation {:type :hello-received :response "Mock LLM Response"}] val)))
+          (is (= [:hello-received {:response "Mock LLM Response"}] val)))
 
         (finally
           (async/close! cell-in-chan)

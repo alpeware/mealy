@@ -25,8 +25,7 @@
         (defmethod action/execute :llm-request
           [{:keys [callback-event]} {:keys [cell-in-chan]}]
           ;; we expect callback-event to be :policy-consent-evaluated
-          (async/put! cell-in-chan [:observation {:type callback-event
-                                                  :response "CONSENT: This code looks safe."}]))
+          (async/put! cell-in-chan [callback-event {:response "CONSENT: This code looks safe."}]))
 
         ;; Start the shell with the channels provided in the environment.
         ;; Using an active worker pool to process out-chan commands.
