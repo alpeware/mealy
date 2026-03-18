@@ -1,6 +1,7 @@
 (ns mealy.intelligence.adapters.llama-test
   "Tests for the Llama Provider Adapter"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [cheshire.core :as json]
+            [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
@@ -12,20 +13,27 @@
   (prop/for-all [url gen/string-alphanumeric
                  model gen/string-alphanumeric
                  prompt gen/string-alphanumeric]
-                (let [req (llama/build-request url model prompt)]
+                (let [req (llama/build-request url model prompt)
+                      system-prompt "You are the deterministic cognitive routing engine for an autonomous agent. Your ONLY purpose is to evaluate the user's provided State and Proposed Policy. You do not converse. You do not offer help. If the Proposed Policy does not critically harm the Aim or violate Memory, you MUST output exactly: 'CONSENT: [brief reason]'. If it violates a critical constraint, output exactly: 'OBJECTION: [reason]'."
+                      expected-body (json/generate-string
+                                     {:messages [{:role "system" :content system-prompt}
+                                                 {:role "user" :content prompt}]
+                                      :max_tokens 2048
+                                      :stop ["<|im_end|>" "<|endoftext|>"]
+                                      :stream false})]
                   (and
                    (= (:method req) :post)
-                   (= (:url req) (str url "/api/generate"))
+                   (= (:url req) (str url "/v1/chat/completions"))
                    (= (get-in req [:headers "Content-Type"]) "application/json")
-                   (= (:body req) (str "{\"model\":\"" model "\",\"prompt\":\"" prompt "\",\"stream\":false}"))))))
+                   (= (:body req) expected-body)))))
 
 (deftest parse-response-test
   (testing "Successful response parsing"
-    (let [json-body "{\"model\":\"llama3.2\",\"created_at\":\"2023-08-04T19:22:45.499127Z\",\"response\":\"The sky is blue\",\"done\":true,\"context\":[1,2,3],\"total_duration\":10706818083,\"load_duration\":6338219291,\"prompt_eval_count\":26,\"prompt_eval_duration\":130079000,\"eval_count\":259,\"eval_duration\":4232710000}"
+    (let [json-body "{\"id\":\"chatcmpl-123\",\"object\":\"chat.completion\",\"created\":1677652288,\"model\":\"llama3.2\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The sky is blue\"},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":12,\"total_tokens\":21}}"
           resp {:status 200 :body json-body}
           parsed (llama/parse-response resp)]
       (is (= (:response parsed) "The sky is blue"))
-      (is (= (:tokens parsed) 259))
+      (is (= (:tokens parsed) 21))
       (is (nil? (:error parsed)))))
 
   (testing "Error response parsing (e.g., 400 Bad Request)"
