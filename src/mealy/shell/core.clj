@@ -63,29 +63,41 @@
 (defn start-shell
   "Spawns a go-loop that consumes events from `in-chan`, processes them
   through the pure `reducer/handle-event`, and routes any resulting commands
-  to `out-chan`. When `in-chan` is closed, the loop terminates and closes `out-chan`.
-  Options can provide :snapshot-interval and :snapshot-path to periodically serialize the state."
+  to `out-chan` (for `:execute-action`) or `app-out-chan` (for `:app-event`).
+  When `in-chan` is closed, the loop terminates and closes both output channels.
+  Options can provide :snapshot-interval, :snapshot-path, and :app-out-chan."
   ([initial-state in-chan out-chan]
    (start-shell initial-state in-chan out-chan {}))
   ([initial-state in-chan out-chan opts]
    (let [log-path (:event-log-path opts "events.log")
          snapshot-interval (:snapshot-interval opts)
-         snapshot-path (:snapshot-path opts "snapshot.nippy")]
+         snapshot-path (:snapshot-path opts "snapshot.nippy")
+         app-out-chan (:app-out-chan opts (async/chan 100))
+         opts-with-app (assoc opts :app-out-chan app-out-chan)]
 
-     (start-worker-pool out-chan opts)
+     (start-worker-pool out-chan opts-with-app)
 
-     (go-loop [state initial-state
-               event-count 0]
-       (if-let [event (<! in-chan)]
-         (let [_ (<! (async/thread (spit log-path (str (pr-str (sanitize-event event)) "\n") :append true)))
-               {:keys [state commands]} (reducer/handle-event state event)
-               new-count (inc event-count)]
+     (let [shell-loop (go-loop [state initial-state
+                                event-count 0]
+                        (if-let [event (<! in-chan)]
+                          (let [_ (<! (async/thread (spit log-path (str (pr-str (sanitize-event event)) "\n") :append true)))
+                                {:keys [state commands]} (reducer/handle-event state event)
+                                new-count (inc event-count)]
 
-           (when (and snapshot-interval
-                      (zero? (mod new-count snapshot-interval)))
-             (<! (async/thread (nippy/freeze-to-file snapshot-path {:state state :event-count new-count}))))
+                            (when (and snapshot-interval
+                                       (zero? (mod new-count snapshot-interval)))
+                              (<! (async/thread (nippy/freeze-to-file snapshot-path {:state state :event-count new-count}))))
 
-           (doseq [cmd commands]
-             (>! out-chan cmd))
-           (recur state new-count))
-         (async/close! out-chan))))))
+                            (doseq [cmd commands]
+                              (case (:type cmd)
+                                :execute-action (>! out-chan cmd)
+                                :app-event (>! app-out-chan cmd)
+                                nil))
+                            (recur state new-count))
+                          (do
+                            (async/close! out-chan)
+                            (async/close! app-out-chan))))]
+       {:in-chan in-chan
+        :out-chan out-chan
+        :app-out-chan app-out-chan
+        :shell-loop shell-loop}))))

@@ -10,6 +10,7 @@
             [clojure.test.check.properties :as prop]
             [mealy.action.core :as action]
             [mealy.cell.core :as cell]
+            [mealy.cell.reducer :as reducer]
             [mealy.shell.core :as shell]
             [taoensso.nippy :as nippy]))
 
@@ -294,3 +295,35 @@
 
       (.delete temp-log)
       (.delete temp-snap))))
+
+(deftest test-command-routing-split
+  (testing "Shell routes :execute-action to out-chan and :app-event to app-out-chan"
+    (let [initial-state (cell/make-cell "Aim" {})
+          in-chan (async/chan 10)
+          out-chan (async/chan 10)
+          temp-file (java.io.File/createTempFile "events" ".log")
+          log-path (.getAbsolutePath temp-file)]
+      (with-redefs [mealy.cell.reducer/handle-event
+                    (fn [state _event]
+                      {:state state
+                       :commands [{:type :execute-action :action {:type :test-action}}
+                                  {:type :app-event :payload "ui-ready"}]})]
+        (let [shell-map (shell/start-shell initial-state in-chan out-chan
+                                           {:event-log-path log-path
+                                            :workers 0})
+              app-out-chan (:app-out-chan shell-map)]
+          ;; Send an event to trigger the mocked reducer
+          (async/>!! in-chan [:observation {:temp 98.6}])
+          ;; Read from out-chan
+          (let [[cmd1 _] (async/alts!! [out-chan (async/timeout 1000)])]
+            (is (not (nil? cmd1)))
+            (is (= :execute-action (:type cmd1)))
+            (is (= :test-action (-> cmd1 :action :type))))
+          ;; Read from app-out-chan
+          (let [[cmd2 _] (async/alts!! [app-out-chan (async/timeout 1000)])]
+            (is (not (nil? cmd2)))
+            (is (= :app-event (:type cmd2)))
+            (is (= "ui-ready" (:payload cmd2))))
+          ;; Close and clean up
+          (async/close! in-chan)
+          (.delete temp-file))))))
