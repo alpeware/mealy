@@ -12,12 +12,13 @@
   100
   (prop/for-all [url gen/string-alphanumeric
                  model gen/string-alphanumeric
-                 prompt gen/string-alphanumeric]
-                (let [req (llama/build-request url model prompt)
-                      system-prompt "You are the deterministic cognitive routing engine for an autonomous agent. Your ONLY purpose is to evaluate the user's provided State and Proposed Policy. You do not converse. You do not offer help. If the Proposed Policy does not critically harm the Aim or violate Memory, you MUST output exactly: 'CONSENT: [brief reason]'. If it violates a critical constraint, output exactly: 'OBJECTION: [reason]'."
+                 system-prompt gen/string-alphanumeric
+                 user-prompt gen/string-alphanumeric]
+                (let [messages [{:role "system" :content system-prompt}
+                                {:role "user" :content user-prompt}]
+                      req (llama/build-request url model messages)
                       expected-body (json/generate-string
-                                     {:messages [{:role "system" :content system-prompt}
-                                                 {:role "user" :content prompt}]
+                                     {:messages messages
                                       :max_tokens 2048
                                       :stop ["<|im_end|>" "<|endoftext|>"]
                                       :stream false})]

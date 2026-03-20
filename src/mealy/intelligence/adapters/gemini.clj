@@ -8,12 +8,16 @@
 
 (defn build-request
   "Pure function to build the hato request map."
-  [api-key model prompt]
-  {:url (str "https://generativelanguage.googleapis.com/v1beta/models/" model ":generateContent?key=" api-key)
-   :method :post
-   :headers {"Content-Type" "application/json"}
-   :body (json/generate-string
-          {:contents [{:parts [{:text prompt}]}]})})
+  [api-key model messages]
+  (let [system-message (first (filter #(= (:role %) "system") messages))
+        other-messages (filter #(not= (:role %) "system") messages)
+        contents (mapv (fn [m] {:parts [{:text (:content m)}]}) other-messages)
+        body-map (cond-> {:contents contents}
+                   system-message (assoc :systemInstruction {:parts [{:text (:content system-message)}]}))]
+    {:url (str "https://generativelanguage.googleapis.com/v1beta/models/" model ":generateContent?key=" api-key)
+     :method :post
+     :headers {"Content-Type" "application/json"}
+     :body (json/generate-string body-map)}))
 
 (defn parse-response
   "Pure function to parse the HTTP response map from Gemini."
@@ -50,11 +54,11 @@
 
 (defn create-llm-fn
   "Creates an llm-fn that sends non-blocking async requests to the Gemini API.
-   Returns a function `(fn [prompt]) -> channel` that fulfills the provider contract."
+   Returns a function `(fn [messages]) -> channel` that fulfills the provider contract."
   [api-key model]
-  (fn [prompt]
+  (fn [messages]
     (let [res-chan (async/chan 1)
-          req (build-request api-key model prompt)
+          req (build-request api-key model messages)
           future (hc/request (assoc req :async? true))]
       (-> future
           (.thenAccept

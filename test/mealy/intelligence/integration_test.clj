@@ -12,7 +12,7 @@
           provider-low-chan (async/chan 10)
           provider-high-chan (async/chan 10)
 
-          dummy-llm-fn (fn [_prompt]
+          dummy-llm-fn (fn [_messages]
                          (let [out (async/chan 1)]
                            (async/go
                              (async/<! (async/timeout 10))
@@ -39,7 +39,7 @@
         ;; Execute the llm-request action directly
         (action/execute
          {:type :llm-request
-          :prompt "Hello"
+          :messages [{:role "user" :content "Hello"}]
           :complexity :low
           :callback-event :hello-received}
          {:router-chan router-cmd-chan

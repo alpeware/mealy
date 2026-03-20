@@ -16,17 +16,17 @@
               (fn [{:keys [prompt]} {:keys [out-chan]}]
                 (a/put! out-chan {:type :execute-action
                                   :action {:type :llm-request
-                                           :prompt prompt
+                                           :messages [{:role "user" :content prompt}]
                                            :callback-event :thought-result}}))
               {:doc "Delegates a cognitive task to the LLM. Expects a :prompt string."}))
 
 (.addMethod execute :llm-request
             (with-meta
-              (fn [{:keys [prompt estimated-tokens complexity callback-event]}
+              (fn [{:keys [messages estimated-tokens complexity callback-event]}
                    {:keys [router-chan cell-in-chan]}]
                 (let [reply-chan (a/chan 1)]
                   (a/put! router-chan {:type :evaluate
-                                       :prompt prompt
+                                       :messages messages
                                        :estimated-tokens estimated-tokens
                                        :complexity complexity
                                        :reply-chan reply-chan})

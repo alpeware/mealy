@@ -7,17 +7,14 @@
             [hato.client :as hc]
             [mealy.intelligence.provider :as provider]))
 
-(def ^:private sociocratic-system-prompt "You are the deterministic cognitive routing engine for an autonomous agent. Your ONLY purpose is to evaluate the user's provided State and Proposed Policy. You do not converse. You do not offer help. If the Proposed Policy does not critically harm the Aim or violate Memory, you MUST output exactly: 'CONSENT: [brief reason]'. If it violates a critical constraint, output exactly: 'OBJECTION: [reason]'.")
-
 (defn build-request
   "Pure function to build the hato request map."
-  [url _model prompt]
+  [url _model messages]
   {:url (str url "/v1/chat/completions")
    :method :post
    :headers {"Content-Type" "application/json"}
    :body (json/generate-string
-          {:messages [{:role "system" :content sociocratic-system-prompt}
-                      {:role "user" :content prompt}]
+          {:messages messages
            :max_tokens 2048
            :stop ["<|im_end|>" "<|endoftext|>"]
            :stream false})})
@@ -50,11 +47,11 @@
 
 (defn create-llm-fn
   "Creates an llm-fn that sends non-blocking async requests to the Ollama API.
-   Returns a function `(fn [prompt]) -> channel` that fulfills the provider contract."
+   Returns a function `(fn [messages]) -> channel` that fulfills the provider contract."
   [url model]
-  (fn [prompt]
+  (fn [messages]
     (let [res-chan (async/chan 1)
-          req (build-request url model prompt)
+          req (build-request url model messages)
           future (hc/request (assoc req :async? true))]
       (-> future
           (.thenAccept

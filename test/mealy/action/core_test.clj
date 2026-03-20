@@ -21,7 +21,7 @@
       (action/execute action env)
       (let [expected {:type :execute-action
                       :action {:type :llm-request
-                               :prompt "What is the meaning of life?"
+                               :messages [{:role "user" :content "What is the meaning of life?"}]
                                :callback-event :thought-result}}
             ;; alts!! with timeout prevents test hangs
             [val port] (a/alts!! [out-chan (a/timeout 100)])]
@@ -55,7 +55,7 @@
     (let [router-chan (a/chan 1)
           cell-in-chan (a/chan 1)
           action {:type :llm-request
-                  :prompt "test-prompt"
+                  :messages [{:role "user" :content "test-prompt"}]
                   :callback-event :my-event
                   :estimated-tokens 50
                   :complexity :low}
@@ -65,7 +65,7 @@
       (let [[router-cmd port] (a/alts!! [router-chan (a/timeout 100)])]
         (is (= router-chan port))
         (is (= :evaluate (:type router-cmd)))
-        (is (= "test-prompt" (:prompt router-cmd)))
+        (is (= [{:role "user" :content "test-prompt"}] (:messages router-cmd)))
         (is (= 50 (:estimated-tokens router-cmd)))
         (is (= :low (:complexity router-cmd)))
         ;; Send back a successful response on the reply-chan
@@ -83,7 +83,7 @@
     (let [router-chan (a/chan 1)
           cell-in-chan (a/chan 1)
           action {:type :llm-request
-                  :prompt "test-prompt"
+                  :messages [{:role "user" :content "test-prompt"}]
                   :callback-event :my-event}
           env {:router-chan router-chan :cell-in-chan cell-in-chan}]
       (action/execute action env)

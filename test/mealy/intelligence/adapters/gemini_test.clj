@@ -11,13 +11,16 @@
   100
   (prop/for-all [api-key gen/string-alphanumeric
                  model gen/string-alphanumeric
-                 prompt gen/string-alphanumeric]
-                (let [req (gemini/build-request api-key model prompt)]
+                 system-prompt gen/string-alphanumeric
+                 user-prompt gen/string-alphanumeric]
+                (let [messages [{:role "system" :content system-prompt}
+                                {:role "user" :content user-prompt}]
+                      req (gemini/build-request api-key model messages)]
                   (and
                    (= (:method req) :post)
                    (= (:url req) (str "https://generativelanguage.googleapis.com/v1beta/models/" model ":generateContent?key=" api-key))
                    (= (get-in req [:headers "Content-Type"]) "application/json")
-                   (= (:body req) (str "{\"contents\":[{\"parts\":[{\"text\":\"" prompt "\"}]}]}"))))))
+                   (= (:body req) (str "{\"contents\":[{\"parts\":[{\"text\":\"" user-prompt "\"}]}],\"systemInstruction\":{\"parts\":[{\"text\":\"" system-prompt "\"}]}}"))))))
 
 (deftest parse-response-test
   (testing "Successful response parsing"

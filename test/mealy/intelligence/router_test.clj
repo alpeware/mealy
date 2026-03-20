@@ -62,7 +62,7 @@
       ;; p3 doesn't have enough budget (requires 100, has 50).
       ;; p1 is healthy and has budget, so it should be selected despite being :low.
       (let [reply-chan (async/chan)]
-        (>!! cmd-chan {:type :evaluate :prompt "test" :estimated-tokens 100 :complexity :medium :reply-chan reply-chan})
+        (>!! cmd-chan {:type :evaluate :messages [{:role "user" :content "test"}] :estimated-tokens 100 :complexity :medium :reply-chan reply-chan})
         (let [result (<!! reply-chan)]
           (is (= "p1" (:response result)))
           (is (= 10 (:tokens result)))))
