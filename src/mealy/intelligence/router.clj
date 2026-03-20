@@ -47,7 +47,7 @@
   (go-loop []
     (let [val (<! cmd-chan)]
       (when val
-        (let [{:keys [type prompt estimated-tokens complexity reply-chan]} val]
+        (let [{:keys [type messages estimated-tokens complexity reply-chan]} val]
           (if (= type :evaluate)
             (let [;; Send status requests to all providers concurrently (must be eager)
                   status-chans (doall
@@ -70,7 +70,7 @@
                 ;; Forward evaluate command to the best provider
                 (let [provider-chan (get-in registry [best-pid :chan])]
                   (>! provider-chan {:type :evaluate
-                                     :prompt prompt
+                                     :messages messages
                                      :estimated-tokens estimated-tokens
                                      :reply-chan reply-chan}))
                 ;; No valid provider found

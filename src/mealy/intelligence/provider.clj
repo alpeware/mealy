@@ -48,8 +48,8 @@
   "Spawns a go-loop that manages the provider's state and processes commands.
    `config` specifies initial budget and limits.
    `cmd-chan` receives `{:type :status :reply-chan c}` and
-                       `{:type :evaluate :prompt p :estimated-tokens t :reply-chan c}`.
-   `llm-fn` is an async function `(fn [prompt]) -> channel` that returns
+                       `{:type :evaluate :messages m :estimated-tokens t :reply-chan c}`.
+   `llm-fn` is an async function `(fn [messages]) -> channel` that returns
             `{:tokens n :response r}` or `{:error true :backoff-ms ms :reason r}`."
   [config cmd-chan llm-fn]
   (let [response-chan (async/chan 10)]
@@ -68,7 +68,7 @@
 
           ;; Message from cmd-chan
           (= port cmd-chan)
-          (let [{:keys [type reply-chan prompt estimated-tokens]} val]
+          (let [{:keys [type reply-chan messages estimated-tokens]} val]
             (case type
               :status
               (do
@@ -79,7 +79,7 @@
               (let [eval-check (handle-evaluate-command state (or estimated-tokens 0) now)]
                 (if (:can-evaluate? eval-check)
                   ;; Valid to evaluate, kick off the async llm-fn
-                  (let [llm-res-chan (llm-fn prompt)]
+                  (let [llm-res-chan (llm-fn messages)]
                     (async/go
                       (let [res (<! llm-res-chan)]
                         ;; Tag the response with the reply-chan so the main loop can send it back

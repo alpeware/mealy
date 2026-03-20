@@ -30,11 +30,11 @@
 (deftest start-provider-test
   (testing "provider actor maintains state and processes commands"
     (let [cmd-chan (async/chan 10)
-          llm-fn (fn [prompt]
+          llm-fn (fn [messages]
                    (let [c (async/chan)]
                      (async/go
                        (async/<! (async/timeout 10))
-                       (async/>! c {:tokens 10 :response (str "Resp: " prompt)}))
+                       (async/>! c {:tokens 10 :response (str "Resp: " (:content (first messages)))}))
                      c))
           config {:provider-id :test-provider :budget 100 :rpm 60}
           _provider-chan (provider/start-provider config cmd-chan llm-fn)]
@@ -48,7 +48,7 @@
 
       ;; Send an evaluate command
       (let [reply-chan (async/chan)]
-        (>!! cmd-chan {:type :evaluate :prompt "hello" :estimated-tokens 10 :reply-chan reply-chan})
+        (>!! cmd-chan {:type :evaluate :messages [{:role "user" :content "hello"}] :estimated-tokens 10 :reply-chan reply-chan})
         (let [result (<!! reply-chan)]
           (is (= "Resp: hello" (:response result)))
           (is (= 10 (:tokens result)))))
@@ -86,7 +86,7 @@
 
       ;; Send an evaluate command to trigger the error and backoff
       (let [reply-chan (async/chan)]
-        (>!! cmd-chan {:type :evaluate :prompt "hello" :estimated-tokens 10 :reply-chan reply-chan})
+        (>!! cmd-chan {:type :evaluate :messages [{:role "user" :content "hello"}] :estimated-tokens 10 :reply-chan reply-chan})
         ;; Wait for the error response
         (let [result (<!! reply-chan)]
           (is (true? (:error result)))
@@ -101,7 +101,7 @@
 
       ;; Try to evaluate again, it should be rejected due to backoff
       (let [reply-chan (async/chan)]
-        (>!! cmd-chan {:type :evaluate :prompt "hello again" :estimated-tokens 10 :reply-chan reply-chan})
+        (>!! cmd-chan {:type :evaluate :messages [{:role "user" :content "hello again"}] :estimated-tokens 10 :reply-chan reply-chan})
         (let [result (<!! reply-chan)]
           (is (= :error (:status result)))
           (is (= :in-backoff (:reason result)))))
@@ -127,7 +127,7 @@
 
       ;; Send an evaluate command that requires more tokens than available
       (let [reply-chan (async/chan)]
-        (>!! cmd-chan {:type :evaluate :prompt "hello" :estimated-tokens 10 :reply-chan reply-chan})
+        (>!! cmd-chan {:type :evaluate :messages [{:role "user" :content "hello"}] :estimated-tokens 10 :reply-chan reply-chan})
         (let [result (<!! reply-chan)]
           (is (= :error (:status result)))
           (is (= :insufficient-budget (:reason result)))))

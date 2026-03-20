@@ -35,7 +35,8 @@
           {:state (assoc new-state :phase :evaluating)
            :commands [{:type :execute-action
                        :action {:type :llm-request
-                                :prompt (prompt/compile-prompt new-state)
+                                :messages [{:role "system" :content prompt/sociocratic-system-prompt}
+                                           {:role "user" :content (prompt/compile-prompt new-state)}]
                                 :complexity :high
                                 :callback-event :consent-evaluated}}]}))
       {:state new-state
@@ -57,7 +58,8 @@
     {:state (assoc new-state :phase :evaluating)
      :commands [{:type :execute-action
                  :action {:type :llm-request
-                          :prompt (prompt/compile-prompt new-state)
+                          :messages [{:role "system" :content prompt/sociocratic-system-prompt}
+                                     {:role "user" :content (prompt/compile-prompt new-state)}]
                           :complexity :high
                           :callback-event :policy-consent-evaluated}}]}))
 
