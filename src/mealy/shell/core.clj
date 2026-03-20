@@ -10,6 +10,20 @@
             [sci.core :as sci]
             [taoensso.nippy :as nippy]))
 
+(defmulti persist-event?
+  "Determines whether an event should be persisted to the event log.
+  Ephemeral events like `:tick` provide no historical value and are bypassed
+  to prevent log bloat, as their impact (time progression) is captured in periodic state snapshots."
+  first)
+
+(defmethod persist-event? :default
+  [_]
+  true)
+
+(defmethod persist-event? :tick
+  [_]
+  false)
+
 (defn sanitize-event
   "Sanitizes an event for EDN serialization at the IO boundary.
   Converts rich types in `:eval-success` observations into strings."
@@ -80,7 +94,8 @@
      (let [shell-loop (go-loop [state initial-state
                                 event-count 0]
                         (if-let [event (<! in-chan)]
-                          (let [_ (<! (async/thread (spit log-path (str (pr-str (sanitize-event event)) "\n") :append true)))
+                          (let [_ (when (persist-event? event)
+                                    (<! (async/thread (spit log-path (str (pr-str (sanitize-event event)) "\n") :append true))))
                                 {:keys [state commands]} (reducer/handle-event state event)
                                 new-count (inc event-count)]
 

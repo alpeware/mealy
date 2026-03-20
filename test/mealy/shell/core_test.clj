@@ -327,3 +327,40 @@
           ;; Close and clean up
           (async/close! in-chan)
           (.delete temp-file))))))
+
+(deftest test-persist-event
+  (testing "persist-event? correctly identifies ephemeral events"
+    (is (true? (shell/persist-event? [:observation {:foo "bar"}])))
+    (is (true? (shell/persist-event? [:anchor-tap {:anchor "test"}])))
+    (is (false? (shell/persist-event? [:tick {:timestamp 12345}]))))
+
+  (testing "start-shell bypasses persisting ephemeral events to disk"
+    (let [initial-state (cell/make-cell "Aim" {})
+          in-chan (async/chan 10)
+          out-chan (async/chan 10)
+          temp-file (java.io.File/createTempFile "events" ".log")
+          log-path (.getAbsolutePath temp-file)]
+
+      (shell/start-shell initial-state in-chan out-chan
+                         {:event-log-path log-path
+                          :workers 0})
+
+      ;; Send a mix of normal and ephemeral events
+      (async/>!! in-chan [:observation {:foo "bar"}])
+      (async/>!! in-chan [:tick {:timestamp 12345}])
+      (async/>!! in-chan [:observation {:baz "qux"}])
+
+      ;; Give shell time to process the events
+      (async/<!! (async/timeout 100))
+
+      (async/close! in-chan)
+
+      ;; Verify log contents
+      (let [log-contents (slurp log-path)]
+        (is (.contains log-contents ":observation"))
+        (is (.contains log-contents "bar"))
+        (is (.contains log-contents "baz"))
+        (is (not (.contains log-contents ":tick")))
+        (is (not (.contains log-contents "12345"))))
+
+      (.delete temp-file))))
