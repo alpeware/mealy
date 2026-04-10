@@ -12,6 +12,7 @@
             [mealy.intelligence.provider-test]
             [mealy.intelligence.router-test]
             [mealy.ooda.prompt-test]
+            [mealy.runtime.jvm.store-test]
             [mealy.runtime.protocols-test]
             [mealy.shell.core-test]
             [mealy.shell.topology-test]
