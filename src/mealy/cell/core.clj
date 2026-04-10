@@ -8,4 +8,9 @@
   {:aim aim
    :memory memory
    :observations []
-   :phase :idle})
+   :phase :idle
+   :subscriptions #{}
+   :handlers {}
+   :actions {}
+   :parent nil
+   :children #{}})

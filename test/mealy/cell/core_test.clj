@@ -13,11 +13,21 @@
                   (and (= (:aim c) aim)
                        (= (:memory c) memory)
                        (vector? (:observations c))
-                       (empty? (:observations c))))))
+                       (empty? (:observations c))
+                       (= #{} (:subscriptions c))
+                       (= {} (:handlers c))
+                       (= {} (:actions c))
+                       (nil? (:parent c))
+                       (= #{} (:children c))))))
 
 (deftest test-cell-creation
   (testing "Cell initialization"
     (let [c (cell/make-cell "Survive" {:health 100})]
       (is (= "Survive" (:aim c)))
       (is (= {:health 100} (:memory c)))
-      (is (= [] (:observations c))))))
+      (is (= [] (:observations c)))
+      (is (= #{} (:subscriptions c)))
+      (is (= {} (:handlers c)))
+      (is (= {} (:actions c)))
+      (is (nil? (:parent c)))
+      (is (= #{} (:children c))))))
