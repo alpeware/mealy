@@ -3,16 +3,21 @@
             [clojure.test :refer [deftest is testing]]
             [mealy.action.core :as action]
             [mealy.cell.core :as cell]
-            [mealy.shell.core :as shell]))
+            [mealy.runtime.jvm.bus :as bus]
+            [mealy.runtime.jvm.core :as rcore]
+            [mealy.runtime.jvm.store :as store]))
 
 (deftest e2e-policy-proposal-and-execution-test
-  (testing "End-to-end Sociocratic self-modification loop"
+  (testing "End-to-end Sociocratic self-modification loop using JVM Runtime"
     (let [initial-state (cell/make-cell "Learn to echo" {})
           in-chan (async/chan 100)
           out-chan (async/chan 100)
           test-chan (async/chan 100)
-          temp-log (java.io.File/createTempFile "events" ".log")
-          log-path (.getAbsolutePath temp-log)
+          temp-dir (java.nio.file.Files/createTempDirectory "mealy-sociocracy-test" (into-array java.nio.file.attribute.FileAttribute []))
+          dir-path (.getAbsolutePath (.toFile temp-dir))
+          event-store (store/->JVMEventStore {:dir-path dir-path})
+          event-bus (bus/make-bus)
+          cell-id :sociocracy-cell
 
           ;; Save the original :llm-request method to restore later
           original-llm-request-method (get-method action/execute :llm-request)]
@@ -27,13 +32,12 @@
           ;; we expect callback-event to be :policy-consent-evaluated
           (async/put! cell-in-chan [callback-event {:response "CONSENT: This code looks safe."}]))
 
-        ;; Start the shell with the channels provided in the environment.
+        ;; Start the node with the channels provided in the environment.
         ;; Using an active worker pool to process out-chan commands.
-        (shell/start-shell initial-state in-chan out-chan
-                           {:event-log-path log-path
-                            :workers 1
-                            :cell-in-chan in-chan
-                            :test-chan test-chan})
+        (rcore/start-node event-store event-bus cell-id initial-state in-chan out-chan
+                          {:workers 1
+                           :cell-in-chan in-chan
+                           :test-chan test-chan})
 
         ;; Step 1: The Proposal
         ;; Injecting a proposed policy to define a new skill `:echo-test`.
@@ -42,7 +46,7 @@
           (async/>!! in-chan [:propose-policy {:code proposal-code}]))
 
         ;; Step 2: The Wait
-        ;; The shell processes the OODA loop:
+        ;; The node processes the OODA loop:
         ;; 1. Reducer handles :propose-policy -> yields :llm-request.
         ;; 2. Worker pool runs mocked :llm-request -> puts :policy-consent-evaluated on in-chan.
         ;; 3. Reducer handles :policy-consent-evaluated -> yields :eval action.
@@ -65,7 +69,8 @@
           (async/close! in-chan)
           (async/close! out-chan)
           (async/close! test-chan)
-          (.delete temp-log)
+          (doseq [f (reverse (file-seq (.toFile temp-dir)))]
+            (.delete f))
           ;; Restore the original :llm-request action method
           (remove-method action/execute :llm-request)
           (.addMethod action/execute :llm-request original-llm-request-method)
