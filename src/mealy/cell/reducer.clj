@@ -13,12 +13,8 @@
     {:consent consent?
      :response response}))
 
-(defmulti handle-event
-  "Pure function that takes a cell state and an event, and returns a map
-  containing the updated :state and a vector of :commands."
-  (fn [_state [event-type _]] event-type))
-
-(defmethod handle-event :observation
+(defn handle-observation
+  "Handles an :observation event, optionally triggering a reflex or transitioning to :evaluating."
   [state [_ event-data]]
   (let [state-with-obs (update state :observations conj event-data)
         new-state (if (and (= (:type event-data) :eval-success)
@@ -31,39 +27,42 @@
                              (get reflexes event-data))]
         (if reflex-match
           {:state new-state
-           :commands [reflex-match]}
+           :actions [reflex-match]}
           {:state (assoc new-state :phase :evaluating)
-           :commands [{:type :execute-action
-                       :action {:type :llm-request
-                                :messages [{:role "system" :content prompt/sociocratic-system-prompt}
-                                           {:role "user" :content (prompt/compile-prompt new-state)}]
-                                :complexity :high
-                                :callback-event :consent-evaluated}}]}))
+           :actions [{:type :execute-action
+                      :action {:type :llm-request
+                               :messages [{:role "system" :content prompt/sociocratic-system-prompt}
+                                          {:role "user" :content (prompt/compile-prompt new-state)}]
+                               :complexity :high
+                               :callback-event :consent-evaluated}}]}))
       {:state new-state
-       :commands []})))
+       :actions []})))
 
-(defmethod handle-event :consent-evaluated
+(defn handle-consent-evaluated
+  "Handles the LLM response to a consent evaluation."
   [state [_ event-data]]
   (let [{:keys [consent]} (parse-consent (:response event-data))]
     (if consent
       {:state (assoc state :phase :acting)
-       :commands [{:type :execute-action}]}
+       :actions [{:type :execute-action}]}
       {:state (assoc state :phase :idle)
-       :commands []})))
+       :actions []})))
 
-(defmethod handle-event :propose-policy
+(defn handle-propose-policy
+  "Handles a request to propose a new policy, transitioning to :evaluating to seek consent."
   [state [_ event-data]]
   (let [code (:code event-data)
         new-state (update-in state [:memory :proposed-policies] (fnil conj []) code)]
     {:state (assoc new-state :phase :evaluating)
-     :commands [{:type :execute-action
-                 :action {:type :llm-request
-                          :messages [{:role "system" :content prompt/sociocratic-system-prompt}
-                                     {:role "user" :content (prompt/compile-prompt new-state)}]
-                          :complexity :high
-                          :callback-event :policy-consent-evaluated}}]}))
+     :actions [{:type :execute-action
+                :action {:type :llm-request
+                         :messages [{:role "system" :content prompt/sociocratic-system-prompt}
+                                    {:role "user" :content (prompt/compile-prompt new-state)}]
+                         :complexity :high
+                         :callback-event :policy-consent-evaluated}}]}))
 
-(defmethod handle-event :policy-consent-evaluated
+(defn handle-policy-consent-evaluated
+  "Handles the LLM response to a policy proposal consent evaluation."
   [state [_ event-data]]
   (let [{:keys [consent]} (parse-consent (:response event-data))
         policies (get-in state [:memory :proposed-policies] [])
@@ -72,19 +71,35 @@
         new-state (assoc-in state [:memory :proposed-policies] rem-policies)]
     (if consent
       {:state (assoc new-state :phase :acting)
-       :commands [{:type :execute-action
-                   :action {:type :eval
-                            :code policy}}]}
+       :actions [{:type :execute-action
+                  :action {:type :eval
+                           :code policy}}]}
       {:state (assoc new-state :phase :idle)
-       :commands []})))
+       :actions []})))
 
-(defmethod handle-event :evaluation-error
+(defn handle-evaluation-error
+  "Handles an error during evaluation, transitioning to :idle."
   [state [_ event-data]]
   {:state (-> state
               (assoc :phase :idle)
               (assoc :last-error (:reason event-data)))
-   :commands []})
+   :actions []})
 
-(defmethod handle-event :default
-  [state _]
-  {:state state :commands []})
+(def default-handlers
+  "The built-in set of pure handlers for standard mealy actions."
+  {:observation handle-observation
+   :consent-evaluated handle-consent-evaluated
+   :propose-policy handle-propose-policy
+   :policy-consent-evaluated handle-policy-consent-evaluated
+   :evaluation-error handle-evaluation-error})
+
+(defn handle-event
+  "Pure evaluation loop that routes incoming events to the appropriate handler function
+  defined within the Cell's `:handlers` state registry, falling back to `default-handlers`.
+  Returns a map containing the updated `:state` and a vector of `:actions`."
+  [state [event-type _ :as event]]
+  (let [handler (or (get (:handlers state) event-type)
+                    (get default-handlers event-type))]
+    (if handler
+      (handler state event)
+      {:state state :actions []})))

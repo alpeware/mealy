@@ -120,9 +120,11 @@
           (is (= [:observation {:type :new-skill-success}] val) "The new skill should execute successfully"))))))
 
 (deftest test-von-neumann-self-modification-reducer
-  (testing "the :eval action allows defining new defmethods for mealy.cell.reducer/handle-event"
+  (testing "the :eval action allows defining dynamic handlers"
     (let [in-chan (a/chan 1)
-          code "(require '[mealy.cell.reducer :as reducer])\n(defmethod reducer/handle-event :new-event [s e] {:state s :commands []})"
+          ;; Now that handle-event is a pure function driven by state,
+          ;; we evaluate to a map/function that would be added to the cell's handlers
+          code "(fn [s e] {:state s :actions []})"
           eval-action {:type :eval :code code}
           env {:cell-in-chan in-chan}]
       (action/execute eval-action env)
