@@ -51,7 +51,7 @@
 - [x] **Test Coverage & Validation:** Update `test/mealy/cell/reducer_test.clj` to ensure all existing transitions pass with the new multimethod structure. Add a test in `action/core_test.clj` to explicitly verify that evaluating a string like `"(require '[mealy.cell.reducer :as reducer])\n(defmethod reducer/handle-event :new-event [s e] {:state s :commands []})"` successfully mutates the reducer registry.
 
 ## Phase 10: Abstract Runtimes & The Handler/Action Split
-- [ ] **Runtime Protocols:** Create `src/mealy/runtime/protocols.clj`. Define Clojure protocols for `EventBus` (`register`, `subscribe`, `publish`, `query`) and `EventStore` (`snapshot`, `put`, `load`, `get`). Write generative tests verifying protocol invariants.
+- [x] **Runtime Protocols:** Create `src/mealy/runtime/protocols.clj`. Define Clojure protocols for `EventBus` (`register`, `subscribe`, `publish`, `query`) and `EventStore` (`snapshot`, `put`, `load`, `get`). Write generative tests verifying protocol invariants.
 - [ ] **State Expansion:** Update `mealy.cell.core/make-cell` to initialize the expanded state map, including empty maps/sets for `:subscriptions`, `:handlers`, `:actions`, `:parent`, and `:children`. Update existing tests.
 - [ ] **Dynamic Handlers:** Refactor `mealy.cell.reducer`. Replace the static `handle-event` multimethod with a pure evaluation loop that routes incoming events to the appropriate handler function defined within the Cell's `:handlers` state registry. Update the output schema to yield `actions` instead of `commands`.
 - [ ] **Action Schema Refactor:** Update `mealy.action.core` to process the new explicit Action schema. Ensure the `sci-ctx` is updated to safely evaluate both pure Handlers and impure Actions.
