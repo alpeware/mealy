@@ -56,5 +56,5 @@
 - [x] **Dynamic Handlers:** Refactor `mealy.cell.reducer`. Replace the static `handle-event` multimethod with a pure evaluation loop that routes incoming events to the appropriate handler function defined within the Cell's `:handlers` state registry. Update the output schema to yield `actions` instead of `commands`.
 - [x] **Action Schema Refactor:** Update `mealy.action.core` to process the new explicit Action schema. Ensure the `sci-ctx` is updated to safely evaluate both pure Handlers and impure Actions.
 - [x] **The JVM Runtime (Event Store):** Create `mealy.runtime.jvm.store`. Implement the `EventStore` protocol using `taoensso.nippy` for state snapshots and standard `spit`/`slurp` for the append-only event log. Port over the bootloader logic from the old shell.
-- [ ] **The JVM Runtime (Event Bus):** Create `mealy.runtime.jvm.bus`. Implement the `EventBus` protocol using `clojure.core.async` multiplexing.
+- [x] **The JVM Runtime (Event Bus):** Create `mealy.runtime.jvm.bus`. Implement the `EventBus` protocol using `clojure.core.async` multiplexing.
 - [ ] **Runtime Integration & Cleanup:** Wire the JVM Store and Bus together into a unified `mealy.runtime.jvm.core/start-node` entry point. Migrate all `sociocracy_integration_test.clj` assertions to use this new runtime. Delete the deprecated `mealy.shell.*` namespaces.
