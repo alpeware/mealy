@@ -96,14 +96,14 @@
                         (if-let [event (<! in-chan)]
                           (let [_ (when (persist-event? event)
                                     (<! (async/thread (spit log-path (str (pr-str (sanitize-event event)) "\n") :append true))))
-                                {:keys [state commands]} (reducer/handle-event state event)
+                                {:keys [state actions]} (reducer/handle-event state event)
                                 new-count (inc event-count)]
 
                             (when (and snapshot-interval
                                        (zero? (mod new-count snapshot-interval)))
                               (<! (async/thread (nippy/freeze-to-file snapshot-path {:state state :event-count new-count}))))
 
-                            (doseq [cmd commands]
+                            (doseq [cmd actions]
                               (case (:type cmd)
                                 :execute-action (>! out-chan cmd)
                                 :app-event (>! app-out-chan cmd)

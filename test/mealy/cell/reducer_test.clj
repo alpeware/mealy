@@ -7,7 +7,7 @@
             [mealy.cell.core :as cell]
             [mealy.cell.reducer :as reducer]))
 
-(defspec ^{:doc "Generative invariant: handle-event always returns a valid state and commands vector."}
+(defspec ^{:doc "Generative invariant: handle-event always returns a valid state and actions vector."}
   test-handle-event-invariant 100
   (prop/for-all [aim (gen/one-of [(gen/return "a string") (gen/return :a-keyword) (gen/return 'a-symbol)])
                  memory (gen/map gen/keyword gen/any)
@@ -17,9 +17,9 @@
                       result (reducer/handle-event c event)]
                   (and (map? result)
                        (contains? result :state)
-                       (contains? result :commands)
+                       (contains? result :actions)
                        (map? (:state result))
-                       (vector? (:commands result))
+                       (vector? (:actions result))
                        (contains? (:state result) :phase)))))
 
 (deftest test-handle-observation-idle
@@ -28,14 +28,14 @@
           event [:observation {:temp 98.6}]
           result (reducer/handle-event c event)
           new-state (:state result)
-          commands (:commands result)]
+          actions (:actions result)]
       (is (= [{:temp 98.6}] (:observations new-state)))
       (is (= :evaluating (:phase new-state)))
-      (is (= 1 (count commands)))
-      (is (= :execute-action (:type (first commands))))
-      (is (= :llm-request (:type (:action (first commands)))))
-      (is (= :high (:complexity (:action (first commands)))))
-      (is (= :consent-evaluated (:callback-event (:action (first commands))))))))
+      (is (= 1 (count actions)))
+      (is (= :execute-action (:type (first actions))))
+      (is (= :llm-request (:type (:action (first actions)))))
+      (is (= :high (:complexity (:action (first actions)))))
+      (is (= :consent-evaluated (:callback-event (:action (first actions))))))))
 
 (deftest test-handle-observation-reflex
   (testing "[:observation data] matching a reflex yields the reflex command and remains :idle"
@@ -43,22 +43,22 @@
           event [:observation {:type :cpu-temp-high :value 95}]
           result (reducer/handle-event c event)
           new-state (:state result)
-          commands (:commands result)]
+          actions (:actions result)]
       (is (= [{:type :cpu-temp-high :value 95}] (:observations new-state)))
       (is (= :idle (:phase new-state)))
-      (is (= 1 (count commands)))
-      (is (= :throttle-cpu (:type (first commands)))))))
+      (is (= 1 (count actions)))
+      (is (= :throttle-cpu (:type (first actions)))))))
 
 (deftest test-handle-observation-not-idle
-  (testing "[:observation data] event while not :idle buffers observation but yields no commands"
+  (testing "[:observation data] event while not :idle buffers observation but yields no actions"
     (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
           event [:observation {:temp 98.6}]
           result (reducer/handle-event c event)
           new-state (:state result)
-          commands (:commands result)]
+          actions (:actions result)]
       (is (= [{:temp 98.6}] (:observations new-state)))
       (is (= :evaluating (:phase new-state)))
-      (is (empty? commands)))))
+      (is (empty? actions)))))
 
 (deftest test-handle-consent-evaluated-positive
   (testing "[:consent-evaluated data] with positive consent transitions to :acting and yields an :execute-action command"
@@ -66,39 +66,39 @@
           event [:consent-evaluated {:response "I CONSENT to this action"}]
           result (reducer/handle-event c event)
           new-state (:state result)
-          commands (:commands result)]
+          actions (:actions result)]
       (is (= :acting (:phase new-state)))
-      (is (= 1 (count commands)))
-      (is (= :execute-action (:type (first commands)))))))
+      (is (= 1 (count actions)))
+      (is (= :execute-action (:type (first actions)))))))
 
 (deftest test-handle-consent-evaluated-objection
-  (testing "[:consent-evaluated data] with objection transitions to :idle and yields no commands"
+  (testing "[:consent-evaluated data] with objection transitions to :idle and yields no actions"
     (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
           event [:consent-evaluated {:response "I have an OBJECTION to this action"}]
           result (reducer/handle-event c event)
           new-state (:state result)
-          commands (:commands result)]
+          actions (:actions result)]
       (is (= :idle (:phase new-state)))
-      (is (empty? commands)))))
+      (is (empty? actions)))))
 
 (deftest test-handle-evaluation-error
-  (testing "[:evaluation-error data] transitions to :idle, records the error, and yields no commands"
+  (testing "[:evaluation-error data] transitions to :idle, records the error, and yields no actions"
     (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
           event [:evaluation-error {:reason "Timeout"}]
           result (reducer/handle-event c event)
           new-state (:state result)
-          commands (:commands result)]
+          actions (:actions result)]
       (is (= :idle (:phase new-state)))
       (is (= "Timeout" (:last-error new-state)))
-      (is (empty? commands)))))
+      (is (empty? actions)))))
 
 (deftest test-handle-unknown-event
-  (testing "Unknown event returns state unchanged and empty commands"
+  (testing "Unknown event returns state unchanged and empty actions"
     (let [c (cell/make-cell "Survive" {})
           event [:unknown-event {:foo :bar}]
           result (reducer/handle-event c event)]
       (is (= c (:state result)))
-      (is (= [] (:commands result))))))
+      (is (= [] (:actions result))))))
 
 (deftest test-handle-eval-success-persists-policy
   (testing "[:observation data] with :type :eval-success and :code appends code to state's active-policies"
@@ -134,14 +134,14 @@
           event [:propose-policy {:code "(defmethod execute :new-skill ...)"}]
           result (reducer/handle-event c event)
           new-state (:state result)
-          commands (:commands result)]
+          actions (:actions result)]
       (is (= ["(defmethod execute :new-skill ...)"] (get-in new-state [:memory :proposed-policies])))
       (is (= :evaluating (:phase new-state)))
-      (is (= 1 (count commands)))
-      (is (= :execute-action (:type (first commands))))
-      (is (= :llm-request (:type (:action (first commands)))))
-      (is (= :high (:complexity (:action (first commands)))))
-      (is (= :policy-consent-evaluated (:callback-event (:action (first commands))))))))
+      (is (= 1 (count actions)))
+      (is (= :execute-action (:type (first actions))))
+      (is (= :llm-request (:type (:action (first actions)))))
+      (is (= :high (:complexity (:action (first actions)))))
+      (is (= :policy-consent-evaluated (:callback-event (:action (first actions))))))))
 
 (deftest test-handle-policy-consent-evaluated-positive
   (testing "[:policy-consent-evaluated data] with positive consent transitions to :acting, pops the policy, and yields an :execute-action command for :eval"
@@ -149,20 +149,20 @@
           event [:policy-consent-evaluated {:response "I CONSENT to this policy"}]
           result (reducer/handle-event c event)
           new-state (:state result)
-          commands (:commands result)]
+          actions (:actions result)]
       (is (= :acting (:phase new-state)))
       (is (= [] (get-in new-state [:memory :proposed-policies])))
-      (is (= 1 (count commands)))
-      (is (= :execute-action (:type (first commands))))
-      (is (= {:type :eval :code "(defmethod execute :new-skill ...)"} (:action (first commands)))))))
+      (is (= 1 (count actions)))
+      (is (= :execute-action (:type (first actions))))
+      (is (= {:type :eval :code "(defmethod execute :new-skill ...)"} (:action (first actions)))))))
 
 (deftest test-handle-policy-consent-evaluated-objection
-  (testing "[:policy-consent-evaluated data] with objection transitions to :idle, pops the policy, and yields no commands"
+  (testing "[:policy-consent-evaluated data] with objection transitions to :idle, pops the policy, and yields no actions"
     (let [c (assoc (cell/make-cell "Survive" {:proposed-policies ["(defmethod execute :new-skill ...)"]}) :phase :evaluating)
           event [:policy-consent-evaluated {:response "I have an OBJECTION to this policy"}]
           result (reducer/handle-event c event)
           new-state (:state result)
-          commands (:commands result)]
+          actions (:actions result)]
       (is (= :idle (:phase new-state)))
       (is (= [] (get-in new-state [:memory :proposed-policies])))
-      (is (empty? commands)))))
+      (is (empty? actions)))))

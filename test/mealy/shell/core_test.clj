@@ -306,8 +306,8 @@
       (with-redefs [mealy.cell.reducer/handle-event
                     (fn [state _event]
                       {:state state
-                       :commands [{:type :execute-action :action {:type :test-action}}
-                                  {:type :app-event :payload "ui-ready"}]})]
+                       :actions [{:type :execute-action :action {:type :test-action}}
+                                 {:type :app-event :payload "ui-ready"}]})]
         (let [shell-map (shell/start-shell initial-state in-chan out-chan
                                            {:event-log-path log-path
                                             :workers 0})
