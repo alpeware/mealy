@@ -1,7 +1,8 @@
 (ns mealy.action.core-test
   (:require [clojure.core.async :as a]
             [clojure.test :refer [deftest is testing]]
-            [mealy.action.core :as action]))
+            [mealy.action.core :as action]
+            [sci.core :as sci]))
 
 (defmethod action/execute :mock-action
   [_ env]
@@ -19,10 +20,9 @@
           action {:type :think :prompt "What is the meaning of life?"}
           env {:out-chan out-chan}]
       (action/execute action env)
-      (let [expected {:type :execute-action
-                      :action {:type :llm-request
-                               :messages [{:role "user" :content "What is the meaning of life?"}]
-                               :callback-event :thought-result}}
+      (let [expected {:type :llm-request
+                      :messages [{:role "user" :content "What is the meaning of life?"}]
+                      :callback-event :thought-result}
             ;; alts!! with timeout prevents test hangs
             [val port] (a/alts!! [out-chan (a/timeout 100)])]
         (is (= out-chan port) "A value should be put on the out-chan")
@@ -133,3 +133,11 @@
         (is (= :eval-success (:type (second val))) "The evaluation should be successful")
         (when (= :eval-error (:type (second val)))
           (println "Eval Error:" (:error (second val))))))))
+
+(deftest test-sci-ctx-evaluates-handlers-and-actions
+  (testing "sci-ctx safely evaluates pure Handlers and impure Actions"
+    (let [pure-handler-code "(fn [s e] {:state s :actions []})"
+          impure-action-code "(require '[mealy.action.core :as action])\n(defmethod action/execute :sci-test-action [_ _] :ok)"]
+      (is (fn? (sci/eval-string* action/sci-ctx pure-handler-code)))
+      (sci/eval-string* action/sci-ctx impure-action-code)
+      (is (= :ok (action/execute {:type :sci-test-action} {}))))))
