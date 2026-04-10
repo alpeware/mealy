@@ -3,8 +3,7 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
-            [mealy.runtime.protocols :as p])
-  (:refer-clojure :exclude [get load]))
+            [mealy.runtime.protocols :as p]))
 
 (deftype MemoryEventStore [state]
   p/EventStore
@@ -56,7 +55,8 @@
 
       (is (= [{:event 1}] @received)))))
 
-(defspec event-store-put-get-invariant 100
+(defspec ^{:doc "Property test: Putting a sequence of events and getting them back yields the same sequence."}
+  event-store-put-get-invariant 100
   (prop/for-all [id gen/keyword
                  events (gen/vector gen/any)]
                 (let [store (->MemoryEventStore (atom {}))]
@@ -64,7 +64,8 @@
                     (p/put store id e))
                   (= events (p/get store id)))))
 
-(defspec event-store-snapshot-load-invariant 100
+(defspec ^{:doc "Property test: Taking a snapshot and loading it yields the same data."}
+  event-store-snapshot-load-invariant 100
   (prop/for-all [id gen/keyword
                  data gen/any]
                 (let [store (->MemoryEventStore (atom {}))]
