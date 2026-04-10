@@ -14,10 +14,9 @@
 (.addMethod execute :think
             (with-meta
               (fn [{:keys [prompt]} {:keys [out-chan]}]
-                (a/put! out-chan {:type :execute-action
-                                  :action {:type :llm-request
-                                           :messages [{:role "user" :content prompt}]
-                                           :callback-event :thought-result}}))
+                (a/put! out-chan {:type :llm-request
+                                  :messages [{:role "user" :content prompt}]
+                                  :callback-event :thought-result}))
               {:doc "Delegates a cognitive task to the LLM. Expects a :prompt string."}))
 
 (.addMethod execute :llm-request
@@ -41,7 +40,6 @@
   "A sandboxed SCI environment exposing mealy.action.core/execute
   and clojure.core.async/put! for dynamic skill acquisition."
   (sci/init {:namespaces {'mealy.action.core {'execute execute}
-                          'mealy.cell.reducer {'handle-event @(requiring-resolve 'mealy.cell.reducer/handle-event)}
                           'clojure.core.async {'put! a/put!}}}))
 
 (.addMethod execute :eval
