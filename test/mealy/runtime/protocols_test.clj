@@ -18,14 +18,18 @@
 
 (defrecord MemoryEventBus [state]
   p/EventBus
-  (register [_ id]
-    (swap! state update :registered (fnil conj #{}) id))
+  (register [_ topic]
+    (swap! state update :registered (fnil conj #{}) topic))
   (subscribe [_ id topic handler]
     (swap! state assoc-in [:subscriptions topic id] handler))
+  (unsubscribe [_ topic id]
+    (swap! state update-in [:subscriptions topic] dissoc id))
   (publish [_ topic event]
     (let [subs (get-in @state [:subscriptions topic])]
       (doseq [[_ handler] subs]
         (handler event))))
+  (query [_]
+    (get @state :registered #{}))
   (query [_ topic]
     (get-in @state [:subscriptions topic] {})))
 
@@ -44,8 +48,8 @@
   (testing "MemoryEventBus implementation of EventBus protocol"
     (let [bus (->MemoryEventBus (atom {}))
           received (atom [])]
-      (p/register bus :cell-1)
-      (is (contains? (:registered @(:state bus)) :cell-1))
+      (p/register bus :topic-a)
+      (is (contains? (p/query bus) :topic-a))
 
       (p/subscribe bus :cell-1 :topic-a #(swap! received conj %))
       (is (= 1 (count (p/query bus :topic-a))))
@@ -53,6 +57,12 @@
       (p/publish bus :topic-a {:event 1})
       (p/publish bus :topic-b {:event 2}) ; should not be received
 
+      (is (= [{:event 1}] @received))
+
+      (p/unsubscribe bus :topic-a :cell-1)
+      (is (= 0 (count (p/query bus :topic-a))))
+
+      (p/publish bus :topic-a {:event 3})
       (is (= [{:event 1}] @received)))))
 
 (defspec ^{:doc "Property test: Putting a sequence of events and getting them back yields the same sequence."}
