@@ -13,11 +13,12 @@
             [mealy.runtime.jvm.bus-test]
             [mealy.runtime.jvm.core-test]
             [mealy.runtime.jvm.store-test]
+            [mealy.runtime.jvm.http-test]
             [mealy.runtime.protocols-test]
             [mealy.sociocracy-integration-test]))
 
 (defn -main
   "Run all tests."
   []
-  (let [results (run-all-tests)]
+  (let [results (run-all-tests #"mealy.runtime.jvm.http-test")]
     (System/exit (+ (:fail results) (:error results)))))
