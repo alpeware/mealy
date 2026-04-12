@@ -4,14 +4,16 @@
 
 (defprotocol EventBus
   "Protocol for abstract message passing between agent cells."
-  (register [this id]
-    "Registers a cell identifier on the bus.")
+  (register [this topic]
+    "Registers a topic on the bus.")
   (subscribe [this id topic handler]
     "Subscribes a cell to a specific topic with a given callback handler function.")
+  (unsubscribe [this topic id]
+    "Unsubscribes a cell from a specific topic.")
   (publish [this topic event]
     "Publishes an event to a specific topic.")
-  (query [this topic]
-    "Returns the current map of subscribers for a given topic."))
+  (query [this] [this topic]
+    "Returns the registered topics, or the map of subscribers for a given topic."))
 
 (defprotocol EventStore
   "Protocol for state persistence via event sourcing and snapshots."
