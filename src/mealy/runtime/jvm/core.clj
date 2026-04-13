@@ -2,6 +2,7 @@
   "The JVM runtime entry point for Mealy cells. Adapts the pure Sans-IO core to core.async channels
   and wires it to the JVM EventStore and EventBus."
   (:require [clojure.core.async :as async :refer [go-loop <! >!]]
+            [hato.client :as hc]
             [mealy.action.core :as action]
             [mealy.cell.reducer :as reducer]
             [mealy.runtime.jvm.store :as store]
@@ -21,6 +22,29 @@
   [_]
   false)
 
+(defn- execute-http-request
+  "Intercepts and executes :http-request actions using hato asynchronously."
+  [{:keys [req callback-event]} {:keys [cell-in-chan]}]
+  (let [future (hc/request (assoc req :async? true))]
+    (-> future
+        (.thenAccept
+         (reify java.util.function.Consumer
+           (accept [_ resp]
+             (let [status (:status resp)
+                   body (:body resp)]
+               (async/put! cell-in-chan [callback-event {:response {:status status :body body}}])))))
+        (.exceptionally
+         (reify java.util.function.Function
+           (apply [_ ex]
+             (let [cause (if (instance? java.util.concurrent.CompletionException ex)
+                           (.getCause ex)
+                           ex)]
+               (if (instance? clojure.lang.ExceptionInfo cause)
+                 (let [resp (ex-data cause)]
+                   (async/put! cell-in-chan [callback-event {:error true :status (:status resp) :body (:body resp)}]))
+                 (async/put! cell-in-chan [callback-event {:error true :reason (.getMessage cause)}])))
+             nil))))))
+
 (defn- start-worker-pool
   "Starts a generic worker pool to drain `out-chan` and execute actions via `mealy.action.core/execute`."
   [out-chan opts]
@@ -29,8 +53,9 @@
     (dotimes [_ num-workers]
       (go-loop []
         (when-let [cmd (<! out-chan)]
-          (when (= (:type cmd) :execute-action)
-            (action/execute (:action cmd) env))
+          (if (= (:type cmd) :http-request)
+            (execute-http-request cmd env)
+            (action/execute cmd env))
           (recur))))))
 
 (defn start-node
@@ -64,10 +89,9 @@
                              (<! (async/thread (p/snapshot event-store id {:state state :event-count new-count}))))
 
                            (doseq [cmd actions]
-                             (case (:type cmd)
-                               :execute-action (>! out-chan cmd)
-                               :app-event (>! app-out-chan cmd)
-                               nil))
+                             (if (= (:type cmd) :app-event)
+                               (>! app-out-chan cmd)
+                               (when cmd (>! out-chan cmd))))
                            (recur state new-count))
                          (do
                            (async/close! out-chan)

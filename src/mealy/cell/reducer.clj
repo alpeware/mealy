@@ -29,12 +29,11 @@
           {:state new-state
            :actions [reflex-match]}
           {:state (assoc new-state :phase :evaluating)
-           :actions [{:type :execute-action
-                      :action {:type :llm-request
-                               :messages [{:role "system" :content prompt/sociocratic-system-prompt}
-                                          {:role "user" :content (prompt/compile-prompt new-state)}]
-                               :complexity :high
-                               :callback-event :consent-evaluated}}]}))
+           :actions [{:type :llm-request
+                      :messages [{:role "system" :content prompt/sociocratic-system-prompt}
+                                 {:role "user" :content (prompt/compile-prompt new-state)}]
+                      :complexity :high
+                      :callback-event :consent-evaluated}]}))
       {:state new-state
        :actions []})))
 
@@ -44,7 +43,7 @@
   (let [{:keys [consent]} (parse-consent (:response event-data))]
     (if consent
       {:state (assoc state :phase :acting)
-       :actions [{:type :execute-action}]}
+       :actions []}
       {:state (assoc state :phase :idle)
        :actions []})))
 
@@ -54,12 +53,11 @@
   (let [code (:code event-data)
         new-state (update-in state [:memory :proposed-policies] (fnil conj []) code)]
     {:state (assoc new-state :phase :evaluating)
-     :actions [{:type :execute-action
-                :action {:type :llm-request
-                         :messages [{:role "system" :content prompt/sociocratic-system-prompt}
-                                    {:role "user" :content (prompt/compile-prompt new-state)}]
-                         :complexity :high
-                         :callback-event :policy-consent-evaluated}}]}))
+     :actions [{:type :llm-request
+                :messages [{:role "system" :content prompt/sociocratic-system-prompt}
+                           {:role "user" :content (prompt/compile-prompt new-state)}]
+                :complexity :high
+                :callback-event :policy-consent-evaluated}]}))
 
 (defn handle-policy-consent-evaluated
   "Handles the LLM response to a policy proposal consent evaluation."
@@ -71,9 +69,8 @@
         new-state (assoc-in state [:memory :proposed-policies] rem-policies)]
     (if consent
       {:state (assoc new-state :phase :acting)
-       :actions [{:type :execute-action
-                  :action {:type :eval
-                           :code policy}}]}
+       :actions [{:type :eval
+                  :code policy}]}
       {:state (assoc new-state :phase :idle)
        :actions []})))
 

@@ -32,10 +32,9 @@
       (is (= [{:temp 98.6}] (:observations new-state)))
       (is (= :evaluating (:phase new-state)))
       (is (= 1 (count actions)))
-      (is (= :execute-action (:type (first actions))))
-      (is (= :llm-request (:type (:action (first actions)))))
-      (is (= :high (:complexity (:action (first actions)))))
-      (is (= :consent-evaluated (:callback-event (:action (first actions))))))))
+      (is (= :llm-request (:type (first actions))))
+      (is (= :high (:complexity (first actions))))
+      (is (= :consent-evaluated (:callback-event (first actions)))))))
 
 (deftest test-handle-observation-reflex
   (testing "[:observation data] matching a reflex yields the reflex command and remains :idle"
@@ -68,8 +67,7 @@
           new-state (:state result)
           actions (:actions result)]
       (is (= :acting (:phase new-state)))
-      (is (= 1 (count actions)))
-      (is (= :execute-action (:type (first actions)))))))
+      (is (= 0 (count actions))))))
 
 (deftest test-handle-consent-evaluated-objection
   (testing "[:consent-evaluated data] with objection transitions to :idle and yields no actions"
@@ -138,10 +136,9 @@
       (is (= ["(defmethod execute :new-skill ...)"] (get-in new-state [:memory :proposed-policies])))
       (is (= :evaluating (:phase new-state)))
       (is (= 1 (count actions)))
-      (is (= :execute-action (:type (first actions))))
-      (is (= :llm-request (:type (:action (first actions)))))
-      (is (= :high (:complexity (:action (first actions)))))
-      (is (= :policy-consent-evaluated (:callback-event (:action (first actions))))))))
+      (is (= :llm-request (:type (first actions))))
+      (is (= :high (:complexity (first actions))))
+      (is (= :policy-consent-evaluated (:callback-event (first actions)))))))
 
 (deftest test-handle-policy-consent-evaluated-positive
   (testing "[:policy-consent-evaluated data] with positive consent transitions to :acting, pops the policy, and yields an :execute-action command for :eval"
@@ -153,8 +150,7 @@
       (is (= :acting (:phase new-state)))
       (is (= [] (get-in new-state [:memory :proposed-policies])))
       (is (= 1 (count actions)))
-      (is (= :execute-action (:type (first actions))))
-      (is (= {:type :eval :code "(defmethod execute :new-skill ...)"} (:action (first actions)))))))
+      (is (= {:type :eval :code "(defmethod execute :new-skill ...)"} (first actions))))))
 
 (deftest test-handle-policy-consent-evaluated-objection
   (testing "[:policy-consent-evaluated data] with objection transitions to :idle, pops the policy, and yields no actions"

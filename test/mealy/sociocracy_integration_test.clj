@@ -56,7 +56,7 @@
         ;; Step 3: The Execution
         ;; The new skill is now registered!
         ;; We manually yield the command by sending it to out-chan for the worker pool to execute.
-        (async/>!! out-chan {:type :execute-action :action {:type :echo-test}})
+        (async/>!! out-chan {:type :echo-test})
 
         ;; Step 4: The Proof
         ;; Read from the test-chan to assert that the new skill executed successfully.

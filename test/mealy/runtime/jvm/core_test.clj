@@ -44,21 +44,19 @@
           (is (not (nil? (:node-loop node-map))))
 
           ;; Test that the worker pool processes actions correctly
-          (async/>!! out-chan {:type :execute-action
-                               :action {:type :test-action
-                                        :payload "hello"}})
+          (async/>!! out-chan {:type :test-action
+                               :payload "hello"})
           (let [[result _] (async/alts!! [execution-chan (async/timeout 1000)])]
             (is (not (nil? result)))
             (is (= :test-action (-> result :action :type)))
             (is (= "hello" (-> result :action :payload)))
-            (is (= "mock-gateway" (-> result :env :gateway-chan)))
             (is (= "mock-cell-in" (-> result :env :cell-in-chan))))
 
           ;; Test that sending an event persists it and routes commands
           (with-redefs [reducer/handle-event
                         (fn [state _event]
                           {:state state
-                           :actions [{:type :execute-action :action {:type :test-action :payload "from-reducer"}}
+                           :actions [{:type :test-action :payload "from-reducer"}
                                      {:type :app-event :payload "ui-ready"}]})]
             (async/>!! in-chan [:observation {:temp 98.6}])
 
