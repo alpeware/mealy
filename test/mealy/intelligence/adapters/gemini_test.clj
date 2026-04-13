@@ -48,8 +48,6 @@
       (is (= (:reason parsed) "Bad Request"))
       (is (= (:backoff-ms parsed) 1000))))
 
-  (testing "Exception parsing (e.g. network failure)"
-    (let [parsed (gemini/parse-exception (ex-info "Network error" {:cause :timeout}))]
-      (is (= (:error parsed) true))
-      (is (= (:reason parsed) "Network error"))
-      (is (= (:backoff-ms parsed) 5000)))))
+  (testing "Namespace is pure"
+    (is (= #{'build-request 'parse-response}
+           (set (keys (ns-publics 'mealy.intelligence.adapters.gemini)))))))
