@@ -12,8 +12,8 @@
             [mealy.ooda.prompt-test]
             [mealy.runtime.jvm.bus-test]
             [mealy.runtime.jvm.core-test]
-            [mealy.runtime.jvm.store-test]
             [mealy.runtime.jvm.http-test]
+            [mealy.runtime.jvm.store-test]
             [mealy.runtime.protocols-test]
             [mealy.sociocracy-integration-test]))
 

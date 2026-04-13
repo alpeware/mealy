@@ -2,9 +2,9 @@
   (:require [clojure.core.async :as async]
             [clojure.test :refer [deftest is testing]]
             [hato.client :as hc]
+            [mealy.runtime.jvm.bus :as bus]
             [mealy.runtime.jvm.core :as core]
-            [mealy.runtime.jvm.store :as store]
-            [mealy.runtime.jvm.bus :as bus]))
+            [mealy.runtime.jvm.store :as store]))
 
 (defn- temp-dir []
   (let [dir (java.nio.file.Files/createTempDirectory "mealy-http-test" (into-array java.nio.file.attribute.FileAttribute []))]
@@ -24,7 +24,7 @@
                                  ;; Return a completed CompletableFuture
                                  (java.util.concurrent.CompletableFuture/completedFuture
                                   {:status 200 :body "ok"}))]
-        (let [node (core/start-node event-store event-bus :test-node {} (async/chan) out-chan opts)]
+        (let [_node (core/start-node event-store event-bus :test-node {} (async/chan) out-chan opts)]
           (async/>!! out-chan {:type :http-request
                                :req {:url "http://example.com" :method :get}
                                :callback-event :http-result})
