@@ -18,9 +18,13 @@
 
 (defn parse-response
   "Pure function to parse the HTTP response map from Gemini."
-  [{:keys [status body]}]
-  (let [parsed-body (try
-                      (json/parse-string body true)
+  [response-map]
+  (let [status (or (:status response-map) 500)
+        body (:body response-map)
+        parsed-body (try
+                      (if (string? body)
+                        (json/parse-string body true)
+                        body)
                       (catch Exception _
                         body))]
     (if (and (>= status 200) (< status 300))

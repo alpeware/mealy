@@ -23,17 +23,17 @@
                        (contains? (:state result) :phase)))))
 
 (deftest test-handle-observation-idle
-  (testing "[:observation data] event while :idle appends data to state's observations, transitions to :evaluating, and yields a :execute-action command for :llm-request"
-    (let [c (cell/make-cell "Survive" {})
+  (testing "[:observation data] event while :idle appends data to state's observations, transitions to :evaluating, and yields an :http-request command"
+    (let [c (cell/make-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
           event [:observation {:temp 98.6}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
       (is (= [{:temp 98.6}] (:observations new-state)))
       (is (= :evaluating (:phase new-state)))
+      (is (= :p1 (get-in new-state [:memory :active-provider])))
       (is (= 1 (count actions)))
-      (is (= :llm-request (:type (first actions))))
-      (is (= :high (:complexity (first actions))))
+      (is (= :http-request (:type (first actions))))
       (is (= :consent-evaluated (:callback-event (first actions)))))))
 
 (deftest test-handle-observation-reflex
@@ -61,23 +61,33 @@
 
 (deftest test-handle-consent-evaluated-positive
   (testing "[:consent-evaluated data] with positive consent transitions to :acting and yields an :execute-action command"
-    (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
-          event [:consent-evaluated {:response "I CONSENT to this action"}]
+    (let [c (assoc (cell/make-cell "Survive" {:active-provider :p1
+                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+                   :phase :evaluating)
+          json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I CONSENT to this action\"}]}}],\"usageMetadata\":{\"totalTokenCount\":15}}"
+          event [:consent-evaluated {:response {:status 200 :body json-body}}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
       (is (= :acting (:phase new-state)))
-      (is (= 0 (count actions))))))
+      (is (= 0 (count actions)))
+      (is (= 985 (get-in new-state [:memory :providers :p1 :budget])))
+      (is (nil? (get-in new-state [:memory :active-provider]))))))
 
 (deftest test-handle-consent-evaluated-objection
   (testing "[:consent-evaluated data] with objection transitions to :idle and yields no actions"
-    (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
-          event [:consent-evaluated {:response "I have an OBJECTION to this action"}]
+    (let [c (assoc (cell/make-cell "Survive" {:active-provider :p1
+                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+                   :phase :evaluating)
+          json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I have an OBJECTION to this action\"}]}}],\"usageMetadata\":{\"totalTokenCount\":10}}"
+          event [:consent-evaluated {:response {:status 200 :body json-body}}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
       (is (= :idle (:phase new-state)))
-      (is (empty? actions)))))
+      (is (empty? actions))
+      (is (= 990 (get-in new-state [:memory :providers :p1 :budget])))
+      (is (nil? (get-in new-state [:memory :active-provider]))))))
 
 (deftest test-handle-evaluation-error
   (testing "[:evaluation-error data] transitions to :idle, records the error, and yields no actions"
@@ -127,23 +137,27 @@
                        (= response (:response result))))))
 
 (deftest test-handle-propose-policy
-  (testing "[:propose-policy data] event while :idle appends code to state's memory :proposed-policies, transitions to :evaluating, and yields an :execute-action command for :llm-request"
-    (let [c (cell/make-cell "Survive" {})
+  (testing "[:propose-policy data] event while :idle appends code to state's memory :proposed-policies, transitions to :evaluating, and yields an :http-request command"
+    (let [c (cell/make-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
           event [:propose-policy {:code "(defmethod execute :new-skill ...)"}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
       (is (= ["(defmethod execute :new-skill ...)"] (get-in new-state [:memory :proposed-policies])))
       (is (= :evaluating (:phase new-state)))
+      (is (= :p1 (get-in new-state [:memory :active-provider])))
       (is (= 1 (count actions)))
-      (is (= :llm-request (:type (first actions))))
-      (is (= :high (:complexity (first actions))))
+      (is (= :http-request (:type (first actions))))
       (is (= :policy-consent-evaluated (:callback-event (first actions)))))))
 
 (deftest test-handle-policy-consent-evaluated-positive
   (testing "[:policy-consent-evaluated data] with positive consent transitions to :acting, pops the policy, and yields an :execute-action command for :eval"
-    (let [c (assoc (cell/make-cell "Survive" {:proposed-policies ["(defmethod execute :new-skill ...)"]}) :phase :evaluating)
-          event [:policy-consent-evaluated {:response "I CONSENT to this policy"}]
+    (let [c (assoc (cell/make-cell "Survive" {:proposed-policies ["(defmethod execute :new-skill ...)"]
+                                              :active-provider :p1
+                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+                   :phase :evaluating)
+          json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I CONSENT to this policy\"}]}}],\"usageMetadata\":{\"totalTokenCount\":15}}"
+          event [:policy-consent-evaluated {:response {:status 200 :body json-body}}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
@@ -154,8 +168,12 @@
 
 (deftest test-handle-policy-consent-evaluated-objection
   (testing "[:policy-consent-evaluated data] with objection transitions to :idle, pops the policy, and yields no actions"
-    (let [c (assoc (cell/make-cell "Survive" {:proposed-policies ["(defmethod execute :new-skill ...)"]}) :phase :evaluating)
-          event [:policy-consent-evaluated {:response "I have an OBJECTION to this policy"}]
+    (let [c (assoc (cell/make-cell "Survive" {:proposed-policies ["(defmethod execute :new-skill ...)"]
+                                              :active-provider :p1
+                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+                   :phase :evaluating)
+          json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I have an OBJECTION to this policy\"}]}}],\"usageMetadata\":{\"totalTokenCount\":10}}"
+          event [:policy-consent-evaluated {:response {:status 200 :body json-body}}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
