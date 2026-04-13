@@ -1,0 +1,6 @@
+--- TODO.md
++++ TODO.md
+@@ -64,2 +64,2 @@
+ - [x] **Pure Intelligence Routing:** Delete `mealy.intelligence.provider` and `mealy.intelligence.router` entirely. Move the provider scoring, budget tracking, and backoff logic into pure functions within a new `mealy.intelligence.core` namespace.
+-- [ ] **Stateful Routing Integration:** Update the core Cell state (or the `default-handlers`) to manage provider budgets, rate limits, and backoff timestamps directly within the Cell's `:memory`. When a decision requires an LLM, the pure handler should use `mealy.intelligence.core` to select the best provider from memory, and yield an `[:http-request]` action instead of an `[:llm-request]`.
++- [x] **Stateful Routing Integration:** Update the core Cell state (or the `default-handlers`) to manage provider budgets, rate limits, and backoff timestamps directly within the Cell's `:memory`. When a decision requires an LLM, the pure handler should use `mealy.intelligence.core` to select the best provider from memory, and yield an `[:http-request]` action instead of an `[:llm-request]`.
