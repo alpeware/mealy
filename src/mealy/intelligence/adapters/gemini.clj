@@ -1,10 +1,7 @@
 (ns mealy.intelligence.adapters.gemini
   "Gemini Adapter for Mealy Intelligence.
    Implements a non-blocking Provider Actor that interfaces securely with the Gemini REST API."
-  (:require [cheshire.core :as json]
-            [clojure.core.async :as async]
-            [hato.client :as hc]
-            [mealy.intelligence.provider :as provider]))
+  (:require [cheshire.core :as json]))
 
 (defn build-request
   "Pure function to build the hato request map."
@@ -45,42 +42,3 @@
          ;; Give a 60s backoff for 429s (rate limit), 1s backoff for others.
          :backoff-ms (if (= status 429) 60000 1000)}))))
 
-(defn parse-exception
-  "Pure function to handle network/connection exceptions."
-  [ex]
-  {:error true
-   :reason (.getMessage ex)
-   :backoff-ms 5000})
-
-(defn create-llm-fn
-  "Creates an llm-fn that sends non-blocking async requests to the Gemini API.
-   Returns a function `(fn [messages]) -> channel` that fulfills the provider contract."
-  [api-key model]
-  (fn [messages]
-    (let [res-chan (async/chan 1)
-          req (build-request api-key model messages)
-          future (hc/request (assoc req :async? true))]
-      (-> future
-          (.thenAccept
-           (reify java.util.function.Consumer
-             (accept [_ resp]
-               (async/put! res-chan (parse-response resp)))))
-          (.exceptionally
-           (reify java.util.function.Function
-             (apply [_ ex]
-               (let [cause (if (instance? java.util.concurrent.CompletionException ex)
-                             (.getCause ex)
-                             ex)]
-                 (if (instance? clojure.lang.ExceptionInfo cause)
-                   ;; This means hato threw an ExceptionInfo, likely containing the raw response data
-                   (let [resp (ex-data cause)]
-                     (async/put! res-chan (parse-response resp)))
-                   ;; True network error
-                   (async/put! res-chan (parse-exception cause))))
-               nil))))
-      res-chan)))
-
-(defn start-gemini-provider
-  "Spawns a go-loop that wraps the Gemini adapter inside a Provider actor."
-  [config api-key model cmd-chan]
-  (provider/start-provider config cmd-chan (create-llm-fn api-key model)))
