@@ -9,7 +9,7 @@
 
 (deftest e2e-policy-proposal-and-execution-test
   (testing "End-to-end Sociocratic self-modification loop using JVM Runtime"
-    (let [initial-state (cell/make-cell "Learn to echo" {})
+    (let [initial-state (cell/make-cell "Learn to echo" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
           in-chan (async/chan 100)
           out-chan (async/chan 100)
           test-chan (async/chan 100)
@@ -19,18 +19,19 @@
           event-bus (bus/make-bus)
           cell-id :sociocracy-cell
 
-          ;; Save the original :llm-request method to restore later
-          original-llm-request-method (get-method action/execute :llm-request)]
+          ;; Save the original :http-request method to restore later
+          original-http-request-method (get-method action/execute :http-request)]
 
       (try
-        ;; Mock the LLM routing by overriding the :llm-request action
+        ;; Mock the LLM routing by overriding the :http-request action
         ;; so that it immediately returns the mocked consent observation
-        ;; to the cell's input channel, completely bypassing the actual router.
-        (remove-method action/execute :llm-request)
-        (defmethod action/execute :llm-request
-          [{:keys [callback-event]} {:keys [cell-in-chan]}]
-          ;; we expect callback-event to be :policy-consent-evaluated
-          (async/put! cell-in-chan [callback-event {:response "CONSENT: This code looks safe."}]))
+        ;; to the cell's input channel, completely bypassing actual network IO.
+        (remove-method action/execute :http-request)
+        (defmethod action/execute :http-request
+          [{:keys [callback-event]} env]
+          (let [cell-in-chan (or (:cell-in-chan env) (:in-chan env))
+                json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"CONSENT: This code looks safe.\"}]}}],\"usageMetadata\":{\"totalTokenCount\":15}}"]
+            (async/put! cell-in-chan [callback-event {:response {:status 200 :body json-body}}])))
 
         ;; Start the node with the channels provided in the environment.
         ;; Using an active worker pool to process out-chan commands.
@@ -47,11 +48,14 @@
 
         ;; Step 2: The Wait
         ;; The node processes the OODA loop:
-        ;; 1. Reducer handles :propose-policy -> yields :llm-request.
-        ;; 2. Worker pool runs mocked :llm-request -> puts :policy-consent-evaluated on in-chan.
+        ;; 1. Reducer handles :propose-policy -> yields :http-request.
+        ;; 2. Worker pool runs mocked :http-request -> puts :policy-consent-evaluated on in-chan.
         ;; 3. Reducer handles :policy-consent-evaluated -> yields :eval action.
         ;; 4. Worker pool runs :eval -> runs sci/eval-string*, returning :eval-success to in-chan.
-        (async/<!! (async/timeout 1000))
+        (async/<!! (async/timeout 100))
+        (async/<!! (async/timeout 100))
+        (async/<!! (async/timeout 100))
+        (async/<!! (async/timeout 100))
 
         ;; Step 3: The Execution
         ;; The new skill is now registered!
@@ -71,8 +75,9 @@
           (async/close! test-chan)
           (doseq [f (reverse (file-seq (.toFile temp-dir)))]
             (.delete f))
-          ;; Restore the original :llm-request action method
-          (remove-method action/execute :llm-request)
-          (.addMethod action/execute :llm-request original-llm-request-method)
+          ;; Restore the original :http-request action method
+          (remove-method action/execute :http-request)
+          (when original-http-request-method
+            (.addMethod action/execute :http-request original-http-request-method))
           ;; Remove the dynamically created :echo-test method to avoid test pollution
           (remove-method action/execute :echo-test))))))
