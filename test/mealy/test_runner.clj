@@ -20,5 +20,5 @@
 (defn -main
   "Run all tests."
   []
-  (let [results (run-all-tests #"mealy.runtime.jvm.http-test")]
+  (let [results (run-all-tests)]
     (System/exit (+ (:fail results) (:error results)))))

@@ -25,10 +25,9 @@
                                  (java.util.concurrent.CompletableFuture/completedFuture
                                   {:status 200 :body "ok"}))]
         (let [node (core/start-node event-store event-bus :test-node {} (async/chan) out-chan opts)]
-          (async/>!! out-chan {:type :execute-action
-                               :action {:type :http-request
-                                        :req {:url "http://example.com" :method :get}
-                                        :callback-event :http-result}})
+          (async/>!! out-chan {:type :http-request
+                               :req {:url "http://example.com" :method :get}
+                               :callback-event :http-result})
           (let [[val port] (async/alts!! [cell-in-chan (async/timeout 1000)])]
             (is (= port cell-in-chan))
             (is (= [:http-result {:response {:status 200 :body "ok"}}] val))))))))
