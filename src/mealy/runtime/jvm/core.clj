@@ -87,6 +87,9 @@
                                {:keys [state actions]} (reducer/handle-event state event)
                                new-count (inc event-count)]
 
+                           (when-let [sa (:state-atom opts)]
+                             (reset! sa state))
+
                            (when (and snapshot-interval
                                       (zero? (mod new-count snapshot-interval)))
                              (<! (async/thread (p/snapshot event-store id {:state state :event-count new-count}))))

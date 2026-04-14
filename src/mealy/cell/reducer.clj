@@ -157,6 +157,79 @@
                                               :tokens (:tokens parsed)}))
        :actions []})))
 
+(defn- epoch-ms->local-str
+  "Converts epoch milliseconds to a human-readable local timestamp string
+   including the day of the week, e.g. 'Monday, 2026-04-14 10:55:24 CDT'."
+  [epoch-ms]
+  (let [instant (java.time.Instant/ofEpochMilli epoch-ms)
+        zoned (.atZone instant (java.time.ZoneId/systemDefault))
+        formatter (java.time.format.DateTimeFormatter/ofPattern "EEEE, yyyy-MM-dd HH:mm:ss z")]
+    (.format zoned formatter)))
+
+(defn handle-tick
+  "Handles a :tick event containing a timestamp in epoch milliseconds.
+   Converts the timestamp to a human-readable local time string and stores it
+   in the cell's memory under :current-time."
+  [state [_ event-data]]
+  (let [ts (:timestamp event-data)
+        human-time (epoch-ms->local-str ts)]
+    {:state (assoc-in state [:memory :current-time] human-time)
+     :actions []}))
+
+(defn- compile-tap-system-prompt
+  "Compiles a system prompt for a tap interaction, giving the LLM context
+   about the cell's aim, current time, phase, and recent observations."
+  [state]
+  (let [aim (:aim state)
+        current-time (get-in state [:memory :current-time] "unknown")
+        phase (name (:phase state))
+        recent-obs (take-last 5 (:observations state))]
+    (str "You are an autonomous Mealy cell. A human colleague is checking in with you.\n\n"
+         "Your aim: " aim "\n"
+         "Current time: " current-time "\n"
+         "Current phase: " phase "\n"
+         (when (seq recent-obs)
+           (str "Recent observations:\n"
+                (str/join "\n" (map pr-str recent-obs))
+                "\n"))
+         "\nRespond concisely and helpfully. Be conversational.")))
+
+(defn handle-tap
+  "Handles a :tap event — a human checking in with the cell.
+   Appends the user message to [:memory :chat] and routes an LLM request
+   with the full chat history and cell context as the system prompt."
+  [state [_ event-data]]
+  (let [prompt (:prompt event-data)
+        chat (get-in state [:memory :chat] [])
+        updated-chat (conj chat {:role "user" :content prompt})
+        new-state (assoc-in state [:memory :chat] updated-chat)
+        system-prompt (compile-tap-system-prompt new-state)
+        messages (into [{:role "system" :content system-prompt}]
+                       updated-chat)]
+    (route-llm-request new-state messages :low 1000 :tap-response)))
+
+(defn handle-tap-response
+  "Handles the LLM response to a tap interaction.
+   Parses the response, appends the assistant reply to [:memory :chat],
+   and emits an :app-event action so the response reaches the dashboard."
+  [state [_ event-data]]
+  (let [parsed (parse-llm-response state (:response event-data))
+        state-updated (update-provider-state state parsed)]
+    (if (:error parsed)
+      {:state (-> state-updated
+                  (assoc :phase :idle)
+                  (assoc :last-error (:reason parsed)))
+       :actions []}
+      (let [reply (:response parsed)
+            new-state (-> state-updated
+                          (assoc :phase :idle)
+                          (update-in [:memory :chat] conj
+                                     {:role "assistant" :content reply}))]
+        {:state new-state
+         :actions [{:type :app-event
+                    :event-type :tap-response
+                    :content reply}]}))))
+
 (defn handle-evaluation-error
   "Handles an error during evaluation, transitioning to :idle."
   [state [_ event-data]]
@@ -173,6 +246,9 @@
    :policy-consent-evaluated handle-policy-consent-evaluated
    :think-request handle-think-request
    :thought-result handle-thought-result
+   :tick handle-tick
+   :tap handle-tap
+   :tap-response handle-tap-response
    :evaluation-error handle-evaluation-error})
 
 (defn handle-event

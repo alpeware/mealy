@@ -7,7 +7,6 @@
             [compojure.core :refer [defroutes GET POST]]
             [compojure.route :as route]
             [mealy.cell.core :as cell]
-            [mealy.cell.reducer :as reducer]
             [mealy.runtime.jvm.core :as rcore]
             [mealy.runtime.protocols :as p]
             [mealy.runtime.protocols-test :refer [->MemoryEventStore ->MemoryEventBus]]
@@ -26,6 +25,9 @@
 
 (defonce ^{:doc "Active cell runtime state: store, bus, channels, node." :private true}
   cell-state (atom nil))
+
+(defonce ^{:doc "App events received from the cell's app-out-chan." :private true}
+  app-events (atom []))
 
 (defn- serialize-state
   "Converts cell state to a serializable map, stripping function values."
@@ -47,18 +49,10 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- handle-get-state
-  "Returns the current cell state as EDN by replaying events from the MemoryEventStore."
+  "Returns the live cell state as EDN from the state atom."
   [_req]
   (if-let [cs @cell-state]
-    (let [store (:store cs)
-          id (:id cs)
-          initial (:initial-state cs)
-          all-events (p/get store id)
-          reconstructed (reduce (fn [s e]
-                                  (:state (reducer/handle-event s e)))
-                                initial
-                                all-events)]
-      (edn-response (serialize-state reconstructed)))
+    (edn-response (serialize-state @(:live-state cs)))
     (edn-response nil)))
 
 (defn- handle-get-events
@@ -70,6 +64,19 @@
           events (p/get store id)]
       (edn-response (vec events)))
     (edn-response [])))
+
+(defn- handle-get-app-events
+  "Returns all app events received from the cell as EDN."
+  [_req]
+  (edn-response @app-events))
+
+(defn- start-app-event-consumer!
+  "Starts a go-loop that drains the app-out-chan and accumulates app events."
+  [app-out-chan]
+  (async/go-loop []
+    (when-let [evt (async/<! app-out-chan)]
+      (swap! app-events conj evt)
+      (recur))))
 
 (defn- handle-start-cell
   "Starts a new Mealy cell from the EDN config in the request body."
@@ -89,18 +96,29 @@
           store (->MemoryEventStore (atom {}))
           bus (->MemoryEventBus (atom {}))
           cell-id :dev-cell
+          live-state (atom initial-state)
           in-chan (async/chan 100)
           out-chan (async/chan 100)
           node (rcore/start-node store bus cell-id initial-state in-chan out-chan
                                  {:workers 1
-                                  :cell-in-chan in-chan})]
+                                  :cell-in-chan in-chan
+                                  :state-atom live-state})
+          heartbeat (async/go-loop []
+                      (async/<! (async/timeout 1000))
+                      (when (async/put! in-chan [:tick {:timestamp (System/currentTimeMillis)}])
+                        (recur)))]
+      ;; Consume app events from the node
+      (start-app-event-consumer! (:app-out-chan node))
+      (reset! app-events [])
       (reset! cell-state {:store store
                           :bus bus
                           :id cell-id
                           :initial-state initial-state
+                          :live-state live-state
                           :in-chan in-chan
                           :out-chan out-chan
-                          :node node})
+                          :node node
+                          :heartbeat heartbeat})
       (edn-response {:status :started
                      :aim aim
                      :providers (count providers)}))))
@@ -126,6 +144,7 @@
                   (resp/content-type "text/html")))
   (GET "/api/state" req (handle-get-state req))
   (GET "/api/events" req (handle-get-events req))
+  (GET "/api/app-events" req (handle-get-app-events req))
   (POST "/api/cell/start" req (handle-start-cell req))
   (POST "/api/cell/event" req (handle-send-event req))
   (route/not-found "Not Found"))

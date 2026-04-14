@@ -17,6 +17,7 @@
   (r/atom {:view :config ;; :config | :dashboard
            :cell-state nil
            :events []
+           :app-events []
            :error nil
            :aim "Learn to autonomously summarize incoming observations."
            :adapters [{:adapter-type :gemini
@@ -34,6 +35,7 @@
                        :budget 50000
                        :complexity :medium}]
            :event-input "[:observation {:type :test :data \"hello\"}]"
+           :tap-input ""
            :polling? false}))
 
 ;; ---------------------------------------------------------------------------
@@ -60,14 +62,25 @@
                        (reader/read-string resp)))
      :error-handler (fn [_] nil)}))
 
+(defn ^:private poll-app-events!
+  "Fetches app events (e.g. tap responses) from the backend."
+  []
+  (GET "/api/app-events"
+    {:response-format :text
+     :handler (fn [resp]
+                (swap! app-state assoc :app-events
+                       (reader/read-string resp)))
+     :error-handler (fn [_] nil)}))
+
 (defn ^:private start-polling!
-  "Begins a 2-second polling interval for state and events."
+  "Begins a 2-second polling interval for state, events, and app events."
   []
   (when-not (:polling? @app-state)
     (swap! app-state assoc :polling? true)
     (js/setInterval (fn []
                       (poll-state!)
-                      (poll-events!))
+                      (poll-events!)
+                      (poll-app-events!))
                     2000)))
 
 (defn ^:private start-cell!
@@ -105,6 +118,22 @@
                     (swap! app-state assoc :event-input "")
                     (poll-state!)
                     (poll-events!))
+         :error-handler (fn [_] nil)}))))
+
+(defn ^:private send-tap!
+  "Sends a tap message to the cell as [:tap {:prompt ...}]."
+  []
+  (let [input (:tap-input @app-state)]
+    (when (seq input)
+      (POST "/api/cell/event"
+        {:body (pr-str [:tap {:prompt input}])
+         :headers {"Content-Type" "application/edn"}
+         :response-format :text
+         :handler (fn [_]
+                    (swap! app-state assoc :tap-input "")
+                    (poll-state!)
+                    (poll-events!)
+                    (poll-app-events!))
          :error-handler (fn [_] nil)}))))
 
 ;; ---------------------------------------------------------------------------
@@ -234,8 +263,40 @@
     :else
     [:span.tree-val (pr-str data)]))
 
+(defn ^:private chat-panel
+  "Renders the chat panel showing conversation history from cell memory."
+  []
+  (let [chat (get-in (:cell-state @app-state) [:memory :chat] [])
+        tap-input (:tap-input @app-state)]
+    [:div.panel.chat-panel
+     [:div.panel-header
+      [:h2 "💬 Tap Chat"]
+      [:span.event-count (str (count chat) " messages")]]
+     [:div.panel-body.chat-list
+      (if (seq chat)
+        (doall
+         (map-indexed
+          (fn [i msg]
+            ^{:key i}
+            [:div.chat-message
+             {:class (if (= (:role msg) "user") "chat-user" "chat-assistant")}
+             [:div.chat-role (if (= (:role msg) "user") "You" "Cell")]
+             [:div.chat-content (:content msg)]])
+          chat))
+        [:div.placeholder "No conversation yet. Tap the cell to start."])]
+     [:div.tap-input-row
+      [:input.tap-input
+       {:type "text"
+        :value tap-input
+        :placeholder "Hey, how's it going?"
+        :on-change #(swap! app-state assoc :tap-input (.. % -target -value))
+        :on-key-down #(when (= (.-key %) "Enter") (send-tap!))}]
+      [:button.btn-tap
+       {:on-click send-tap!}
+       "👋 Tap"]]]))
+
 (defn ^:private dashboard-view
-  "Renders the live dashboard with cell state tree, event log, and event injection."
+  "Renders the live dashboard with cell state tree, event log, chat, and event injection."
   []
   (let [{:keys [cell-state events event-input]} @app-state]
     [:div.dashboard-container
@@ -243,6 +304,9 @@
       [:h1 "🧠 Mealy Cell Dashboard"]
       [:div.status-row
        [:span.status-dot] [:span "Cell Active"]]]
+
+     ;; Chat panel (full width above the grid)
+     [chat-panel]
 
      [:div.dashboard-grid
       ;; State panel
