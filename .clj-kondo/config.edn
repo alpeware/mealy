@@ -6,5 +6,6 @@
                                      mealy.ooda.prompt-test/compile-prompt-basic-test
                                      mealy.ooda.prompt-test/test-compile-prompt-returns-string]
                       :exclude-namespaces [mealy.ooda.prompt-test]}
-  :unsorted-required-namespaces {:level :warning}}
+  :unsorted-required-namespaces {:level :warning}
+  :unresolved-var {:exclude [ajax.core]}}
  :lint-as {clojure.test.check.clojure-test/defspec clojure.core/def}}

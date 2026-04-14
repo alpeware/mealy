@@ -139,6 +139,24 @@
                      [{:role "user" :content (:prompt event-data)}]
                      :low 500 :thought-result))
 
+(defn handle-thought-result
+  "Handles the LLM response to a think request.
+   Parses the response, updates provider budget, and records the thought as an observation."
+  [state [_ event-data]]
+  (let [parsed (parse-llm-response state (:response event-data))
+        state-updated (update-provider-state state parsed)]
+    (if (:error parsed)
+      {:state (-> state-updated
+                  (assoc :phase :idle)
+                  (assoc :last-error (:reason parsed)))
+       :actions []}
+      {:state (-> state-updated
+                  (assoc :phase :idle)
+                  (update :observations conj {:type :thought
+                                              :content (:response parsed)
+                                              :tokens (:tokens parsed)}))
+       :actions []})))
+
 (defn handle-evaluation-error
   "Handles an error during evaluation, transitioning to :idle."
   [state [_ event-data]]
@@ -154,6 +172,7 @@
    :propose-policy handle-propose-policy
    :policy-consent-evaluated handle-policy-consent-evaluated
    :think-request handle-think-request
+   :thought-result handle-thought-result
    :evaluation-error handle-evaluation-error})
 
 (defn handle-event
