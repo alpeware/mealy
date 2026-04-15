@@ -8,6 +8,7 @@
             [compojure.route :as route]
             [mealy.action.core :as action]
             [mealy.cell.core :as cell]
+            [mealy.cell.reducer :as reducer]
             [mealy.runtime.jvm.core :as rcore]
             [mealy.runtime.protocols :as p]
             [mealy.runtime.protocols-test :refer [->MemoryEventStore ->MemoryEventBus]]
@@ -25,8 +26,8 @@
 (defonce ^{:doc "The running http-kit server instance." :private true}
   server (atom nil))
 
-(defonce ^{:doc "Active cell runtime state: store, bus, channels, node." :private true}
-  cell-state (atom nil))
+(defonce ^{:doc "Active cells runtime state map: {cell-id {...}}." :private true}
+  cell-state (atom {}))
 
 (defonce ^{:doc "App events received from the cell's app-out-chan." :private true}
   app-events (atom []))
@@ -52,39 +53,72 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- handle-get-state
-  "Returns the live cell state as EDN from the state atom."
+  "Returns the live cell states as an aggregated EDN map."
   [_req]
-  (if-let [cs @cell-state]
-    (edn-response (serialize-state @(:live-state cs)))
-    (edn-response nil)))
+  (let [cs-map @cell-state]
+    (if (seq cs-map)
+      (edn-response (into {} (map (fn [[cid ctx]] [cid (serialize-state @(:live-state ctx))]) cs-map)))
+      (edn-response nil))))
 
 (defn- handle-get-events
-  "Returns all persisted events for the active cell as EDN."
+  "Returns all persisted events for all cells as an aggregated EDN map."
   [_req]
-  (if-let [cs @cell-state]
-    (let [store (:store cs)
-          id (:id cs)
-          events (p/get store id)]
-      (edn-response (vec events)))
-    (edn-response [])))
+  (let [cs-map @cell-state]
+    (if (seq cs-map)
+      (let [store (:store (val (first cs-map)))
+            events-map (into {} (map (fn [[cid _]] [cid (p/get store cid)]) cs-map))]
+        (edn-response events-map))
+      (edn-response {}))))
 
 (defn- handle-get-app-events
   "Returns all app events received from the cell as EDN."
   [_req]
   (edn-response @app-events))
 
+(declare spawn-child-node!)
+
 (defn- start-app-event-consumer!
   "Starts a go-loop that drains the app-out-chan and accumulates app events."
   [app-out-chan]
   (async/go-loop []
     (when-let [evt (async/<! app-out-chan)]
-      (swap! app-events conj evt)
+      (if (= (:event-type evt) :spawn-child)
+        (let [child-state (:child-state evt)
+              child-id (keyword (gensym "child-"))]
+          (spawn-child-node! (assoc child-state :id child-id) child-id))
+        (swap! app-events conj evt))
       (recur))))
+
+(defn- spawn-child-node!
+  "Dynamically provisions a new runtime node for a child cell on the same bus."
+  [child-state child-id]
+  (if-let [root-cs (get @cell-state :root)]
+    (let [in-chan (async/chan 100)
+          out-chan (async/chan 100)
+          live-state (atom child-state)
+          store (:store root-cs)
+          bus (:bus root-cs)
+          node (rcore/start-node store bus child-id child-state in-chan out-chan
+                                 {:workers 1
+                                  :cell-in-chan in-chan
+                                  :state-atom live-state})
+          child-ctx {:store store
+                     :bus bus
+                     :id child-id
+                     :initial-state child-state
+                     :live-state live-state
+                     :in-chan in-chan
+                     :out-chan out-chan
+                     :node node
+                     :subscriptions []}]
+      (start-app-event-consumer! (:app-out-chan node))
+      (swap! cell-state assoc child-id child-ctx))
+    (println "Cannot spawn child: No root cell running.")))
 
 (defn- handle-start-cell
   "Starts a new Mealy cell from the EDN config in the request body."
   [req]
-  (if @cell-state
+  (if (seq @cell-state)
     (-> (edn-response {:error "Cell already running. Restart the server to reset."})
         (resp/status 409))
     (let [body (edn/read-string (slurp (:body req)))
@@ -97,11 +131,12 @@
                           adapters)
           initial-state (-> (cell/make-cell aim {:providers providers})
                             (update :subscriptions conj :tick))
-          ;; Register action/execute into the cell's SCI context
+          ;; Register action/execute and reducer/handle-event into the cell's SCI context
           _ (action/register-action-ns! (:sci-ctx initial-state))
+          _ (reducer/register-reducer-ns! (:sci-ctx initial-state))
           store (->MemoryEventStore (atom {}))
           bus (->MemoryEventBus (atom {}))
-          cell-id :dev-cell
+          cell-id :root
           live-state (atom initial-state)
           in-chan (async/chan 100)
           out-chan (async/chan 100)
@@ -115,25 +150,25 @@
       ;; Consume app events from the node
       (start-app-event-consumer! (:app-out-chan node))
       (reset! app-events [])
-      (reset! cell-state {:store store
-                          :bus bus
-                          :id cell-id
-                          :initial-state initial-state
-                          :live-state live-state
-                          :in-chan in-chan
-                          :out-chan out-chan
-                          :node node
-                          :subscriptions [{:config {:type :tick :interval-ms 1000}
-                                           :handle tick-handle}]})
+      (reset! cell-state {cell-id {:store store
+                                   :bus bus
+                                   :id cell-id
+                                   :initial-state initial-state
+                                   :live-state live-state
+                                   :in-chan in-chan
+                                   :out-chan out-chan
+                                   :node node
+                                   :subscriptions [{:config {:type :tick :interval-ms 1000}
+                                                    :handle tick-handle}]}})
       (edn-response {:status :started
                      :aim aim
                      :providers (count providers)}))))
 
 (defn- handle-send-event
-  "Injects an event into the active cell's input channel.
+  "Injects an event into the root cell's input channel.
    Expects an EDN vector like [:observation {:type :foo}]."
   [req]
-  (if-let [cs @cell-state]
+  (if-let [cs (get @cell-state :root)]
     (let [event (edn/read-string (slurp (:body req)))
           in-chan (:in-chan cs)]
       (async/put! in-chan event)
@@ -176,12 +211,12 @@
   (when-let [s @server]
     (s :timeout 100)
     (reset! server nil)
-    (when-let [cs @cell-state]
+    (doseq [[_ cs] @cell-state]
       ;; Stop all subscriptions
       (doseq [{:keys [config handle]} (:subscriptions cs)]
         (sub/stop-subscription config handle))
       (async/close! (:in-chan cs)))
-    (reset! cell-state nil)
+    (reset! cell-state {})
     (println "Server stopped.")))
 
 (defn -main
