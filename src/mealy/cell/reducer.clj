@@ -2,7 +2,9 @@
   "The pure Sans-IO Mealy machine reducer.
   Event handling is extensible via the `handle-event` defmulti, dispatching
   on the first element (event-type keyword) of each event vector."
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
+            [mealy.cell.mitosis :as mitosis]
             [mealy.intelligence.adapters.gemini :as gemini]
             [mealy.intelligence.adapters.llama :as llama]
             [mealy.intelligence.core :as intel]
@@ -76,6 +78,17 @@
     {:consent consent?
      :response response-str}))
 
+(defn- extract-edn-array
+  "Helper to safely extract an EDN array from an LLM response."
+  [s]
+  (try
+    (let [m (re-find #"(?s)\[.*\]" (or s ""))]
+      (if m
+        (let [parsed (edn/read-string m)]
+          (if (vector? parsed) parsed []))
+        []))
+    (catch Exception _ [])))
+
 ;; ---------------------------------------------------------------------------
 ;; Extensible event handler multimethod
 ;; ---------------------------------------------------------------------------
@@ -91,6 +104,14 @@
 (defmethod handle-event :default
   [state _event]
   {:state state :actions []})
+
+(defn register-reducer-ns!
+  "Registers the mealy.cell.reducer/handle-event multimethod into a given SCI context.
+  Call this after creating a cell's SCI context to enable :eval actions
+  that reference reducer/handle-event."
+  [ctx]
+  (swap! (:env ctx) assoc-in [:namespaces 'mealy.cell.reducer 'handle-event] handle-event)
+  ctx)
 
 ;; ---------------------------------------------------------------------------
 ;; :observation — OODA Observe: accumulate only
@@ -118,14 +139,29 @@
         {:state state
          :actions [reflex-match]}
         (route-llm-request (assoc state :phase :evaluating)
-                           [{:role "system" :content prompt/sociocratic-system-prompt}
-                            {:role "user" :content (prompt/compile-prompt state)}]
-                           :high 1000 :consent-evaluated)))
+                           [{:role "system" :content prompt/agentic-system-prompt}
+                            {:role "user" :content (prompt/compile-agentic-prompt state)}]
+                           :high 1000 :orient-evaluated)))
     {:state state
      :actions []}))
 
 ;; ---------------------------------------------------------------------------
-;; :consent-evaluated — OODA Decide: process LLM consent response
+;; :orient-evaluated — OODA Generate Actions: process LLM agentic response
+;; ---------------------------------------------------------------------------
+
+(defmethod handle-event :orient-evaluated
+  [state [_ event-data]]
+  (let [parsed (parse-llm-response state (:response event-data))
+        state-updated (update-provider-state state parsed)]
+    (if (:error parsed)
+      {:state (-> state-updated (assoc :phase :idle) (assoc :last-error (:reason parsed)))
+       :actions []}
+      (let [actions-edn (extract-edn-array (:response parsed))]
+        {:state (assoc state-updated :phase :idle)
+         :actions actions-edn}))))
+
+;; ---------------------------------------------------------------------------
+;; :consent-evaluated — Original consent tracking
 ;; ---------------------------------------------------------------------------
 
 (defmethod handle-event :consent-evaluated
@@ -147,8 +183,10 @@
 
 (defmethod handle-event :proposal
   [state [_ event-data]]
-  (let [code (:code event-data)
-        new-state (update-in state [:memory :pending-proposals] (fnil conj []) code)]
+  (let [prompt-txt (:prompt event-data)
+        new-state (-> state
+                      (update-in [:memory :pending-proposals] (fnil conj []) prompt-txt)
+                      (assoc-in [:memory :eval-retries] 0))]
     (route-llm-request (assoc new-state :phase :evaluating)
                        [{:role "system" :content prompt/sociocratic-system-prompt}
                         {:role "user" :content (prompt/compile-prompt new-state)}]
@@ -160,15 +198,58 @@
         state-updated (update-provider-state state parsed)
         {:keys [consent]} (parse-consent (:response parsed))
         proposals (get-in state-updated [:memory :pending-proposals] [])
-        proposal (first proposals)
+        prompt-txt (first proposals)
         rem-proposals (vec (rest proposals))
         new-state (assoc-in state-updated [:memory :pending-proposals] rem-proposals)]
     (if consent
-      {:state (assoc new-state :phase :acting)
-       :actions [{:type :eval
-                  :code proposal}]}
+      (route-llm-request (assoc new-state :phase :generating-code)
+                         [{:role "system" :content prompt/code-gen-system-prompt}
+                          {:role "user" :content prompt-txt}]
+                         :high 2000 :code-generated)
       {:state (assoc new-state :phase :idle)
        :actions []})))
+
+(defmethod handle-event :code-generated
+  [state [_ event-data]]
+  (let [parsed (parse-llm-response state (:response event-data))
+        state-updated (update-provider-state state parsed)
+        ;; Strip markdown code blocks if any
+        code (-> (or (:response parsed) "")
+                 (str/replace #"(?s)^```[a-z]*\n" "")
+                 (str/replace #"(?s)\n```$" ""))
+        new-state (-> state-updated
+                      (assoc :phase :dry-running)
+                      (assoc-in [:memory :pending-code] code))]
+    {:state new-state
+     :actions [{:type :dry-run-eval :code code}]}))
+
+(defmethod handle-event :dry-run-success
+  [state [_ event-data]]
+  (let [code (:code event-data)
+        new-state (assoc state :phase :code-review)]
+    (route-llm-request new-state
+                       [{:role "system" :content prompt/code-review-system-prompt}
+                        {:role "user" :content (str "Please review the following code:\n\n" code)}]
+                       :high 2000 :code-review-evaluated)))
+
+(defmethod handle-event :code-review-evaluated
+  [state [_ event-data]]
+  (let [parsed (parse-llm-response state (:response event-data))
+        state-updated (update-provider-state state parsed)
+        response-str (or (:response parsed) "")
+        consent? (and (str/includes? (str/upper-case response-str) "CONSENT")
+                      (not (str/includes? (str/upper-case response-str) "OBJECTION")))
+        code (get-in state-updated [:memory :pending-code])]
+    (if consent?
+      (let [new-state (-> state-updated
+                          (assoc :phase :acting)
+                          (update :memory dissoc :pending-code :eval-retries))]
+        {:state new-state
+         :actions [{:type :eval :code code}]})
+      (let [new-state (-> state-updated
+                          (assoc :phase :generating-code)
+                          (update :memory dissoc :pending-code))]
+        (handle-event new-state [:evaluation-error {:reason response-str :code code}])))))
 
 ;; ---------------------------------------------------------------------------
 ;; :propose-policy — Legacy compat: redirects to :proposal
@@ -296,9 +377,16 @@
 (defmethod handle-event :tick
   [state [_ event-data]]
   (let [ts (:timestamp event-data)
-        human-time (epoch-ms->local-str ts)]
-    {:state (assoc-in state [:memory :current-time] human-time)
-     :actions []}))
+        human-time (epoch-ms->local-str ts)
+        updated-state (assoc-in state [:memory :current-time] human-time)
+        thresholds (get-in updated-state [:policies :mitosis-thresholds] {:max-observations 5})
+        reached? (mitosis/threshold-reached? updated-state thresholds)]
+    (if reached?
+      (let [{:keys [parent child]} (mitosis/divide updated-state #{:chat} "Specialized child cell")]
+        {:state (assoc parent :observations [])
+         :actions [{:type :app-event :event-type :spawn-child :child-state child}]})
+      {:state updated-state
+       :actions []})))
 
 ;; ---------------------------------------------------------------------------
 ;; :tap / :tap-response — Human chat
@@ -325,14 +413,16 @@
                   (assoc :last-error (:reason parsed)))
        :actions []}
       (let [reply (:response parsed)
+            tools-edn (extract-edn-array reply)
             new-state (-> state-updated
                           (assoc :phase :idle)
                           (update-in [:memory :chat] conj
-                                     {:role "assistant" :content reply}))]
+                                     {:role "assistant" :content reply}))
+            app-action {:type :app-event
+                        :event-type :tap-response
+                        :content reply}]
         {:state new-state
-         :actions [{:type :app-event
-                    :event-type :tap-response
-                    :content reply}]}))))
+         :actions (into [app-action] tools-edn)}))))
 
 ;; ---------------------------------------------------------------------------
 ;; :evaluation-error
@@ -340,7 +430,21 @@
 
 (defmethod handle-event :evaluation-error
   [state [_ event-data]]
-  {:state (-> state
-              (assoc :phase :idle)
-              (assoc :last-error (:reason event-data)))
-   :actions []})
+  (let [code (:code event-data)
+        reason (:reason event-data)
+        retries (get-in state [:memory :eval-retries] 0)]
+    (if (< retries 3)
+      (let [feedback-prompt (str "The following code failed to evaluate:\n" code "\n\nError: " reason "\n\nPlease rewrite it.")
+            new-state (-> state
+                          (assoc :phase :generating-code)
+                          (assoc-in [:memory :eval-retries] (inc retries)))]
+        (route-llm-request new-state
+                           [{:role "system" :content prompt/code-gen-system-prompt}
+                            {:role "user" :content feedback-prompt}]
+                           :high 2000 :code-generated))
+      {:state (-> state
+                  (assoc :phase :idle)
+                  (assoc :last-error reason)
+                  (assoc-in [:memory :eval-retries] 0)
+                  (update-in [:memory :chat] conj {:role "assistant" :content (str "Code evaluation failed permanently after 3 retries:\n" reason)}))
+       :actions []})))

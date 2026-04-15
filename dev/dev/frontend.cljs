@@ -264,9 +264,9 @@
     [:span.tree-val (pr-str data)]))
 
 (defn ^:private chat-panel
-  "Renders the chat panel showing conversation history from cell memory."
+  "Renders the chat panel showing conversation history from root cell memory."
   []
-  (let [chat (get-in (:cell-state @app-state) [:memory :chat] [])
+  (let [chat (get-in (:cell-state @app-state) [:root :memory :chat] [])
         tap-input (:tap-input @app-state)]
     [:div.panel.chat-panel
      [:div.panel-header
@@ -323,17 +323,24 @@
       [:div.panel.events-panel
        [:div.panel-header
         [:h2 "Event Log"]
-        [:span.event-count (str (count events) " events")]]
+        (let [total (reduce + (map (comp count val) events))]
+          [:span.event-count (str total " events")])]
        [:div.panel-body.event-list
         (if (seq events)
           (doall
-           (map-indexed
-            (fn [i evt]
-              ^{:key i}
-              [:div.event-row
-               [:span.event-idx (str "#" (inc i))]
-               [:code.event-data (pr-str evt)]])
-            (reverse events)))
+           (for [[cid evts] events
+                 :when (seq evts)]
+             ^{:key cid}
+             [:div.cell-events-group
+              [:h4 {:style {:margin "0.5rem 0" :color "#64748b"}} "Cell: " (name cid)]
+              (doall
+               (map-indexed
+                (fn [i evt]
+                  ^{:key (str cid "-" i)}
+                  [:div.event-row
+                   [:span.event-idx (str "#" (inc i))]
+                   [:code.event-data (pr-str evt)]])
+                (reverse evts)))]))
           [:div.placeholder "No events yet..."])]]]
 
      ;; Event injection

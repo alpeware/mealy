@@ -34,19 +34,19 @@
       (action/execute action env)
       (let [[val port] (a/alts!! [in-chan (a/timeout 100)])]
         (is (= in-chan port) "A value should be put on the cell-in-chan")
-        (is (= [:observation {:type :eval-success :result 3 :code "(+ 1 2)"}] val) "The correct observation should be constructed and sent")))))
+        (is (= [:observation {:type :eval-success :result "3" :code "(+ 1 2)"}] val) "The correct observation should be constructed and sent")))))
 
 (deftest test-eval-action-error
-  (testing "the :eval action catches errors and returns error observation"
+  (testing "the :eval action catches errors and returns evaluation-error event"
     (let [in-chan (a/chan 1)
           action {:type :eval :code "(/ 1 0)"}
           env {:cell-in-chan in-chan}]
       (action/execute action env)
       (let [[val port] (a/alts!! [in-chan (a/timeout 100)])]
         (is (= in-chan port) "A value should be put on the cell-in-chan")
-        (is (= :observation (first val)) "The first element should be :observation")
-        (is (= :eval-error (:type (second val))) "The type should be :eval-error")
-        (is (string? (:error (second val))) "The error should be a string message")))))
+        (is (= :evaluation-error (first val)) "The first element should be :evaluation-error")
+        (is (string? (:reason (second val))) "The reason should be a string message")
+        (is (= "(/ 1 0)" (:code (second val))) "The code should be passed through")))))
 
 (deftest test-von-neumann-self-modification
   (testing "the :eval action allows defining new defmethods for action/execute"
