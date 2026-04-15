@@ -64,7 +64,7 @@
       (is (= :p1 (get-in new-state [:memory :active-provider])))
       (is (= 1 (count actions)))
       (is (= :http-request (:type (first actions))))
-      (is (= :consent-evaluated (:callback-event (first actions)))))))
+      (is (= :orient-evaluated (:callback-event (first actions)))))))
 
 (deftest test-handle-orient-reflex
   (testing "[:orient] matching a reflex yields the reflex command and remains :idle"
@@ -117,9 +117,10 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-handle-evaluation-error
-  (testing "[:evaluation-error data] transitions to :idle, records the error, and yields no actions"
-    (let [c (assoc (cell/make-cell "Survive" {}) :phase :evaluating)
-          event [:evaluation-error {:reason "Timeout"}]
+  (testing "[:evaluation-error data] after exhausting retries transitions to :idle, records the error, and yields no actions"
+    (let [c (-> (cell/make-cell "Survive" {:eval-retries 3})
+                (assoc :phase :generating-code))
+          event [:evaluation-error {:reason "Timeout" :code "(bad-code)"}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
@@ -144,9 +145,9 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-handle-proposal
-  (testing "[:proposal data] event appends code to :pending-proposals, transitions to :evaluating, yields :http-request"
+  (testing "[:proposal data] event appends prompt to :pending-proposals, transitions to :evaluating, yields :http-request"
     (let [c (cell/make-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
-          event [:proposal {:code "(defmethod execute :new-skill ...)"}]
+          event [:proposal {:prompt "(defmethod execute :new-skill ...)"}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
@@ -158,20 +159,21 @@
       (is (= :proposal-evaluated (:callback-event (first actions)))))))
 
 (deftest test-handle-proposal-evaluated-positive
-  (testing "[:proposal-evaluated data] with positive consent transitions to :acting, pops the proposal, yields :eval"
+  (testing "[:proposal-evaluated data] with positive consent pops the proposal, transitions to :generating-code, yields :http-request"
     (let [c (assoc (cell/make-cell "Survive" {:pending-proposals ["(defmethod execute :new-skill ...)"]
                                               :active-provider :p1
-                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 10000 :complexity :high}}})
                    :phase :evaluating)
           json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I CONSENT to this proposal\"}]}}],\"usageMetadata\":{\"totalTokenCount\":15}}"
           event [:proposal-evaluated {:response {:status 200 :body json-body}}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
-      (is (= :acting (:phase new-state)))
+      (is (= :generating-code (:phase new-state)))
       (is (= [] (get-in new-state [:memory :pending-proposals])))
       (is (= 1 (count actions)))
-      (is (= {:type :eval :code "(defmethod execute :new-skill ...)"} (first actions))))))
+      (is (= :http-request (:type (first actions))))
+      (is (= :code-generated (:callback-event (first actions)))))))
 
 (deftest test-handle-proposal-evaluated-objection
   (testing "[:proposal-evaluated data] with objection transitions to :idle, pops the proposal, yields no actions"
@@ -195,7 +197,7 @@
 (deftest test-handle-propose-policy-legacy
   (testing "[:propose-policy data] redirects to :proposal"
     (let [c (cell/make-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
-          event [:propose-policy {:code "(defmethod execute :new-skill ...)"}]
+          event [:propose-policy {:prompt "(defmethod execute :new-skill ...)"}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
@@ -209,17 +211,18 @@
   (testing "[:policy-consent-evaluated data] redirects to :proposal-evaluated"
     (let [c (assoc (cell/make-cell "Survive" {:pending-proposals ["(defmethod execute :new-skill ...)"]
                                               :active-provider :p1
-                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 10000 :complexity :high}}})
                    :phase :evaluating)
           json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I CONSENT to this policy\"}]}}],\"usageMetadata\":{\"totalTokenCount\":15}}"
           event [:policy-consent-evaluated {:response {:status 200 :body json-body}}]
           result (reducer/handle-event c event)
           new-state (:state result)
           actions (:actions result)]
-      (is (= :acting (:phase new-state)))
+      (is (= :generating-code (:phase new-state)))
       (is (= [] (get-in new-state [:memory :pending-proposals])))
       (is (= 1 (count actions)))
-      (is (= {:type :eval :code "(defmethod execute :new-skill ...)"} (first actions))))))
+      (is (= :http-request (:type (first actions))))
+      (is (= :code-generated (:callback-event (first actions)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; :policy-change — Two-phase Sociocratic consent workflow
