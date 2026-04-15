@@ -20,12 +20,16 @@
   "Partitions a parent cell's state into a new parent and child genesis state.
   Takes the original parent state, a set of partition-keys to move to the child's memory,
   and the child's aim.
+  The child inherits the parent's SCI context (forked) and policies.
   Returns a map containing {:parent new-parent-state :child child-genesis-state}."
   [parent partition-keys child-aim]
   (let [parent-mem (:memory parent)
         child-mem (select-keys parent-mem partition-keys)
         new-parent-mem (apply dissoc parent-mem partition-keys)
-        child (cell/make-cell child-aim child-mem)
+        parent-sci-ctx (:sci-ctx parent)
+        child (-> (cell/make-cell child-aim child-mem parent-sci-ctx)
+                  ;; Inherit parent policies
+                  (assoc :policies (:policies parent [])))
         new-parent (assoc parent :memory new-parent-mem)]
     {:parent new-parent
      :child child}))

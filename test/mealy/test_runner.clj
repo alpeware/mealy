@@ -13,7 +13,8 @@
             [mealy.runtime.jvm.http-test]
             [mealy.runtime.jvm.store-test]
             [mealy.runtime.protocols-test]
-            [mealy.sociocracy-integration-test]))
+            [mealy.sociocracy-integration-test]
+            [mealy.subscription.core-test]))
 
 (defn -main
   "Run all tests."

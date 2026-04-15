@@ -7,9 +7,10 @@
             [mealy.runtime.jvm.core :as rcore]
             [mealy.runtime.jvm.store :as store]))
 
-(deftest e2e-policy-proposal-and-execution-test
+(deftest e2e-proposal-and-execution-test
   (testing "End-to-end Sociocratic self-modification loop using JVM Runtime"
     (let [initial-state (cell/make-cell "Learn to echo" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+          _ (action/register-action-ns! (:sci-ctx initial-state))
           in-chan (async/chan 100)
           out-chan (async/chan 100)
           test-chan (async/chan 100)
@@ -38,19 +39,20 @@
         (rcore/start-node event-store event-bus cell-id initial-state in-chan out-chan
                           {:workers 1
                            :cell-in-chan in-chan
+                           :cell-sci-ctx (:sci-ctx initial-state)
                            :test-chan test-chan})
 
         ;; Step 1: The Proposal
-        ;; Injecting a proposed policy to define a new skill `:echo-test`.
+        ;; Injecting a proposal to define a new skill `:echo-test`.
         ;; The skill will put a message on the `:test-chan` when executed.
         (let [proposal-code "(require '[mealy.action.core :as action])\n(defmethod action/execute :echo-test [_ env] (clojure.core.async/put! (:test-chan env) [:observation {:type :echo-success}]))"]
-          (async/>!! in-chan [:propose-policy {:code proposal-code}]))
+          (async/>!! in-chan [:proposal {:code proposal-code}]))
 
         ;; Step 2: The Wait
         ;; The node processes the OODA loop:
-        ;; 1. Reducer handles :propose-policy -> yields :http-request.
-        ;; 2. Worker pool runs mocked :http-request -> puts :policy-consent-evaluated on in-chan.
-        ;; 3. Reducer handles :policy-consent-evaluated -> yields :eval action.
+        ;; 1. Reducer handles :proposal -> yields :http-request.
+        ;; 2. Worker pool runs mocked :http-request -> puts :proposal-evaluated on in-chan.
+        ;; 3. Reducer handles :proposal-evaluated -> yields :eval action.
         ;; 4. Worker pool runs :eval -> runs sci/eval-string*, returning :eval-success to in-chan.
         (async/<!! (async/timeout 100))
         (async/<!! (async/timeout 100))

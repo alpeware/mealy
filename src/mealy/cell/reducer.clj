@@ -1,10 +1,16 @@
 (ns mealy.cell.reducer
-  "The pure Sans-IO Mealy machine reducer."
+  "The pure Sans-IO Mealy machine reducer.
+  Event handling is extensible via the `handle-event` defmulti, dispatching
+  on the first element (event-type keyword) of each event vector."
   (:require [clojure.string :as str]
             [mealy.intelligence.adapters.gemini :as gemini]
             [mealy.intelligence.adapters.llama :as llama]
             [mealy.intelligence.core :as intel]
             [mealy.ooda.prompt :as prompt]))
+
+;; ---------------------------------------------------------------------------
+;; Shared pure helpers
+;; ---------------------------------------------------------------------------
 
 (defn route-llm-request
   "Pure function to select the best provider, construct an HTTP request action,
@@ -17,7 +23,6 @@
             url (:url provider)
             model (:model provider)
             api-key (:api-key provider)
-            ;; We only have gemini and llama, we'll route based on adapter-type in the provider map
             req (case (:adapter-type provider)
                   :gemini (gemini/build-request api-key model messages)
                   :llama (llama/build-request url model messages))
@@ -71,30 +76,59 @@
     {:consent consent?
      :response response-str}))
 
-(defn handle-observation
-  "Handles an :observation event, optionally triggering a reflex or transitioning to :evaluating."
-  [state [_ event-data]]
-  (let [state-with-obs (update state :observations conj event-data)
-        new-state (if (and (= (:type event-data) :eval-success)
-                           (:code event-data))
-                    (update-in state-with-obs [:memory :active-policies] (fnil conj []) (:code event-data))
-                    state-with-obs)]
-    (if (= (:phase new-state) :idle)
-      (let [reflexes (get-in state [:memory :reflexes])
-            reflex-match (or (get reflexes (:type event-data))
-                             (get reflexes event-data))]
-        (if reflex-match
-          {:state new-state
-           :actions [reflex-match]}
-          (route-llm-request (assoc new-state :phase :evaluating)
-                             [{:role "system" :content prompt/sociocratic-system-prompt}
-                              {:role "user" :content (prompt/compile-prompt new-state)}]
-                             :high 1000 :consent-evaluated)))
-      {:state new-state
-       :actions []})))
+;; ---------------------------------------------------------------------------
+;; Extensible event handler multimethod
+;; ---------------------------------------------------------------------------
 
-(defn handle-consent-evaluated
-  "Handles the LLM response to a consent evaluation."
+(defmulti handle-event
+  "Pure evaluation loop that routes incoming events to the appropriate handler.
+  Dispatches on the event-type keyword (first element of the event vector).
+  Each method receives the full state map and the event vector,
+  and must return {:state <new-state> :actions [<action-maps>]}."
+  (fn [_state [event-type _ :as _event]]
+    event-type))
+
+(defmethod handle-event :default
+  [state _event]
+  {:state state :actions []})
+
+;; ---------------------------------------------------------------------------
+;; :observation — OODA Observe: accumulate only
+;; ---------------------------------------------------------------------------
+
+(defmethod handle-event :observation
+  [state [_ event-data]]
+  (let [new-state (update state :observations conj event-data)]
+    {:state new-state
+     :actions []}))
+
+;; ---------------------------------------------------------------------------
+;; :orient — OODA Orient: evaluate accumulated observations
+;; ---------------------------------------------------------------------------
+
+(defmethod handle-event :orient
+  [state _event]
+  (if (= (:phase state) :idle)
+    (let [reflexes (get-in state [:memory :reflexes])
+          last-obs (last (:observations state))
+          reflex-match (when last-obs
+                         (or (get reflexes (:type last-obs))
+                             (get reflexes last-obs)))]
+      (if reflex-match
+        {:state state
+         :actions [reflex-match]}
+        (route-llm-request (assoc state :phase :evaluating)
+                           [{:role "system" :content prompt/sociocratic-system-prompt}
+                            {:role "user" :content (prompt/compile-prompt state)}]
+                           :high 1000 :consent-evaluated)))
+    {:state state
+     :actions []}))
+
+;; ---------------------------------------------------------------------------
+;; :consent-evaluated — OODA Decide: process LLM consent response
+;; ---------------------------------------------------------------------------
+
+(defmethod handle-event :consent-evaluated
   [state [_ event-data]]
   (let [parsed (parse-llm-response state (:response event-data))
         state-updated (update-provider-state state parsed)
@@ -105,43 +139,132 @@
       {:state (assoc state-updated :phase :idle)
        :actions []})))
 
-(defn handle-propose-policy
-  "Handles a request to propose a new policy, transitioning to :evaluating to seek consent."
+;; ---------------------------------------------------------------------------
+;; :proposal — General proposal evaluation
+;; Operational decisions (code, new skills) are evaluated against Aim +
+;; Policies by the cell autonomously.  If the cell consents, :eval executes.
+;; ---------------------------------------------------------------------------
+
+(defmethod handle-event :proposal
   [state [_ event-data]]
   (let [code (:code event-data)
-        new-state (update-in state [:memory :proposed-policies] (fnil conj []) code)]
+        new-state (update-in state [:memory :pending-proposals] (fnil conj []) code)]
     (route-llm-request (assoc new-state :phase :evaluating)
                        [{:role "system" :content prompt/sociocratic-system-prompt}
                         {:role "user" :content (prompt/compile-prompt new-state)}]
-                       :high 1000 :policy-consent-evaluated)))
+                       :high 1000 :proposal-evaluated)))
 
-(defn handle-policy-consent-evaluated
-  "Handles the LLM response to a policy proposal consent evaluation."
+(defmethod handle-event :proposal-evaluated
   [state [_ event-data]]
   (let [parsed (parse-llm-response state (:response event-data))
         state-updated (update-provider-state state parsed)
         {:keys [consent]} (parse-consent (:response parsed))
-        policies (get-in state-updated [:memory :proposed-policies] [])
-        policy (first policies)
-        rem-policies (vec (rest policies))
-        new-state (assoc-in state-updated [:memory :proposed-policies] rem-policies)]
+        proposals (get-in state-updated [:memory :pending-proposals] [])
+        proposal (first proposals)
+        rem-proposals (vec (rest proposals))
+        new-state (assoc-in state-updated [:memory :pending-proposals] rem-proposals)]
     (if consent
       {:state (assoc new-state :phase :acting)
        :actions [{:type :eval
-                  :code policy}]}
+                  :code proposal}]}
       {:state (assoc new-state :phase :idle)
        :actions []})))
 
-(defn handle-think-request
-  "Handles a request to think, routing it to an LLM provider."
+;; ---------------------------------------------------------------------------
+;; :propose-policy — Legacy compat: redirects to :proposal
+;; ---------------------------------------------------------------------------
+
+(defmethod handle-event :propose-policy
+  [state [_ event-data]]
+  (handle-event state [:proposal event-data]))
+
+(defmethod handle-event :policy-consent-evaluated
+  [state [_ event-data]]
+  (handle-event state [:proposal-evaluated event-data]))
+
+;; ---------------------------------------------------------------------------
+;; :policy-change — Administrative policy changes requiring Sociocratic consent
+;;
+;; Two-phase consent round:
+;;   Phase 1: The cell itself evaluates the proposed policy via LLM.
+;;            → :policy-self-evaluated callback
+;;   Phase 2: If the cell consents, the other representative is asked:
+;;            - :anchor (human) → :app-event consent request
+;;            - parent cell     → :bus-publish consent request
+;;   Both parties must consent for the policy to be adopted.
+;; ---------------------------------------------------------------------------
+
+(defmethod handle-event :policy-change
+  [state [_ event-data]]
+  (let [new-policy (:policy event-data)
+        new-state (-> state
+                      (assoc-in [:memory :pending-policy-change] new-policy)
+                      (assoc :phase :evaluating-policy))]
+    ;; Phase 1: Cell self-evaluates the proposed policy
+    (route-llm-request new-state
+                       [{:role "system" :content prompt/sociocratic-system-prompt}
+                        {:role "user" :content (prompt/compile-policy-evaluation-prompt new-state new-policy)}]
+                       :high 1000 :policy-self-evaluated)))
+
+(defmethod handle-event :policy-self-evaluated
+  [state [_ event-data]]
+  (let [parsed (parse-llm-response state (:response event-data))
+        state-updated (update-provider-state state parsed)
+        {:keys [consent]} (parse-consent (:response parsed))
+        pending-policy (get-in state-updated [:memory :pending-policy-change])]
+    (if consent
+      ;; Cell consents → Phase 2: ask the other representative
+      (let [parent (:parent state-updated)
+            new-state (assoc state-updated :phase :awaiting-consent)]
+        (if (= parent :anchor)
+          ;; Root cell: human is the other representative → emit app-event
+          {:state new-state
+           :actions [{:type :app-event
+                      :event-type :consent-request
+                      :policy pending-policy}]}
+          ;; Child cell: parent cell is the other representative → emit bus event
+          {:state new-state
+           :actions [{:type :bus-publish
+                      :topic parent
+                      :event {:type :consent-request
+                              :from (:id state-updated)
+                              :policy pending-policy}}]}))
+      ;; Cell itself objects → abort, return to idle
+      {:state (-> state-updated
+                  (update :memory dissoc :pending-policy-change)
+                  (assoc :phase :idle))
+       :actions []})))
+
+(defmethod handle-event :consent-granted
+  [state [_ event-data]]
+  (let [policy (or (:policy event-data)
+                   (get-in state [:memory :pending-policy-change]))]
+    (if (and (= (:phase state) :awaiting-consent) policy)
+      {:state (-> state
+                  (update :policies conj policy)
+                  (update :memory dissoc :pending-policy-change)
+                  (assoc :phase :idle))
+       :actions []}
+      {:state state :actions []})))
+
+(defmethod handle-event :consent-rejected
+  [state [_ _event-data]]
+  {:state (-> state
+              (update :memory dissoc :pending-policy-change)
+              (assoc :phase :idle))
+   :actions []})
+
+;; ---------------------------------------------------------------------------
+;; :think-request / :thought-result
+;; ---------------------------------------------------------------------------
+
+(defmethod handle-event :think-request
   [state [_ event-data]]
   (route-llm-request state
                      [{:role "user" :content (:prompt event-data)}]
                      :low 500 :thought-result))
 
-(defn handle-thought-result
-  "Handles the LLM response to a think request.
-   Parses the response, updates provider budget, and records the thought as an observation."
+(defmethod handle-event :thought-result
   [state [_ event-data]]
   (let [parsed (parse-llm-response state (:response event-data))
         state-updated (update-provider-state state parsed)]
@@ -157,6 +280,10 @@
                                               :tokens (:tokens parsed)}))
        :actions []})))
 
+;; ---------------------------------------------------------------------------
+;; :tick — Heartbeat
+;; ---------------------------------------------------------------------------
+
 (defn- epoch-ms->local-str
   "Converts epoch milliseconds to a human-readable local timestamp string
    including the day of the week, e.g. 'Monday, 2026-04-14 10:55:24 CDT'."
@@ -166,52 +293,29 @@
         formatter (java.time.format.DateTimeFormatter/ofPattern "EEEE, yyyy-MM-dd HH:mm:ss z")]
     (.format zoned formatter)))
 
-(defn handle-tick
-  "Handles a :tick event containing a timestamp in epoch milliseconds.
-   Converts the timestamp to a human-readable local time string and stores it
-   in the cell's memory under :current-time."
+(defmethod handle-event :tick
   [state [_ event-data]]
   (let [ts (:timestamp event-data)
         human-time (epoch-ms->local-str ts)]
     {:state (assoc-in state [:memory :current-time] human-time)
      :actions []}))
 
-(defn- compile-tap-system-prompt
-  "Compiles a system prompt for a tap interaction, giving the LLM context
-   about the cell's aim, current time, phase, and recent observations."
-  [state]
-  (let [aim (:aim state)
-        current-time (get-in state [:memory :current-time] "unknown")
-        phase (name (:phase state))
-        recent-obs (take-last 5 (:observations state))]
-    (str "You are an autonomous Mealy cell. A human colleague is checking in with you.\n\n"
-         "Your aim: " aim "\n"
-         "Current time: " current-time "\n"
-         "Current phase: " phase "\n"
-         (when (seq recent-obs)
-           (str "Recent observations:\n"
-                (str/join "\n" (map pr-str recent-obs))
-                "\n"))
-         "\nRespond concisely and helpfully. Be conversational.")))
+;; ---------------------------------------------------------------------------
+;; :tap / :tap-response — Human chat
+;; ---------------------------------------------------------------------------
 
-(defn handle-tap
-  "Handles a :tap event — a human checking in with the cell.
-   Appends the user message to [:memory :chat] and routes an LLM request
-   with the full chat history and cell context as the system prompt."
+(defmethod handle-event :tap
   [state [_ event-data]]
   (let [prompt (:prompt event-data)
         chat (get-in state [:memory :chat] [])
         updated-chat (conj chat {:role "user" :content prompt})
         new-state (assoc-in state [:memory :chat] updated-chat)
-        system-prompt (compile-tap-system-prompt new-state)
+        system-prompt (prompt/compile-tap-system-prompt new-state)
         messages (into [{:role "system" :content system-prompt}]
                        updated-chat)]
     (route-llm-request new-state messages :low 1000 :tap-response)))
 
-(defn handle-tap-response
-  "Handles the LLM response to a tap interaction.
-   Parses the response, appends the assistant reply to [:memory :chat],
-   and emits an :app-event action so the response reaches the dashboard."
+(defmethod handle-event :tap-response
   [state [_ event-data]]
   (let [parsed (parse-llm-response state (:response event-data))
         state-updated (update-provider-state state parsed)]
@@ -230,34 +334,13 @@
                     :event-type :tap-response
                     :content reply}]}))))
 
-(defn handle-evaluation-error
-  "Handles an error during evaluation, transitioning to :idle."
+;; ---------------------------------------------------------------------------
+;; :evaluation-error
+;; ---------------------------------------------------------------------------
+
+(defmethod handle-event :evaluation-error
   [state [_ event-data]]
   {:state (-> state
               (assoc :phase :idle)
               (assoc :last-error (:reason event-data)))
    :actions []})
-
-(def default-handlers
-  "The built-in set of pure handlers for standard mealy actions."
-  {:observation handle-observation
-   :consent-evaluated handle-consent-evaluated
-   :propose-policy handle-propose-policy
-   :policy-consent-evaluated handle-policy-consent-evaluated
-   :think-request handle-think-request
-   :thought-result handle-thought-result
-   :tick handle-tick
-   :tap handle-tap
-   :tap-response handle-tap-response
-   :evaluation-error handle-evaluation-error})
-
-(defn handle-event
-  "Pure evaluation loop that routes incoming events to the appropriate handler function
-  defined within the Cell's `:handlers` state registry, falling back to `default-handlers`.
-  Returns a map containing the updated `:state` and a vector of `:actions`."
-  [state [event-type _ :as event]]
-  (let [handler (or (get (:handlers state) event-type)
-                    (get default-handlers event-type))]
-    (if handler
-      (handler state event)
-      {:state state :actions []})))

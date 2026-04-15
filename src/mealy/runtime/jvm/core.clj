@@ -4,6 +4,7 @@
   (:require [clojure.core.async :as async :refer [go-loop <! >!]]
             [hato.client :as hc]
             [mealy.action.core :as action]
+            [mealy.cell.core :as cell]
             [mealy.cell.reducer :as reducer]
             [mealy.runtime.jvm.store :as store]
             [mealy.runtime.protocols :as p]))
@@ -47,6 +48,13 @@
                            nil))))))
               {:doc "Intercepts and executes :http-request actions using hato asynchronously."}))
 
+(.addMethod action/execute :bus-publish
+            (with-meta
+              (fn [{:keys [topic event]} {:keys [event-bus]}]
+                (when event-bus
+                  (p/publish event-bus topic event)))
+              {:doc "Publishes an event to a topic on the EventBus for inter-cell consent requests."}))
+
 (defn- start-worker-pool
   "Starts a generic worker pool to drain `out-chan` and execute actions via `mealy.action.core/execute`."
   [out-chan opts]
@@ -73,11 +81,16 @@
   ([event-store event-bus id initial-state in-chan out-chan opts]
    (let [snapshot-interval (:snapshot-interval opts)
          app-out-chan (:app-out-chan opts (async/chan 100))
-         opts-with-app (assoc opts :app-out-chan app-out-chan)
+         ;; Pass the cell's SCI context and the event-bus into the worker env
+         cell-sci-ctx (:sci-ctx initial-state)
+         opts-with-extras (assoc opts
+                                 :app-out-chan app-out-chan
+                                 :cell-sci-ctx cell-sci-ctx
+                                 :event-bus event-bus)
          recovered-state (store/restore-cell event-store id initial-state)]
 
      (p/register event-bus id)
-     (start-worker-pool out-chan opts-with-app)
+     (start-worker-pool out-chan opts-with-extras)
 
      (let [node-loop (go-loop [state recovered-state
                                event-count (count (p/get event-store id))]
@@ -92,7 +105,10 @@
 
                            (when (and snapshot-interval
                                       (zero? (mod new-count snapshot-interval)))
-                             (<! (async/thread (p/snapshot event-store id {:state state :event-count new-count}))))
+                             (<! (async/thread
+                                   (p/snapshot event-store id
+                                               {:state (cell/sanitize-for-snapshot state)
+                                                :event-count new-count}))))
 
                            (doseq [cmd actions]
                              (if (= (:type cmd) :app-event)
