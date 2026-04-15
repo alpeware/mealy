@@ -14,11 +14,14 @@
                        (= (:memory c) memory)
                        (vector? (:observations c))
                        (empty? (:observations c))
+                       (vector? (:policies c))
+                       (empty? (:policies c))
                        (= #{} (:subscriptions c))
                        (= {} (:handlers c))
                        (= {} (:actions c))
-                       (nil? (:parent c))
-                       (= #{} (:children c))))))
+                       (= :anchor (:parent c))
+                       (= #{} (:children c))
+                       (some? (:sci-ctx c))))))
 
 (deftest test-cell-creation
   (testing "Cell initialization"
@@ -26,8 +29,26 @@
       (is (= "Survive" (:aim c)))
       (is (= {:health 100} (:memory c)))
       (is (= [] (:observations c)))
+      (is (= [] (:policies c)))
       (is (= #{} (:subscriptions c)))
       (is (= {} (:handlers c)))
       (is (= {} (:actions c)))
-      (is (nil? (:parent c)))
-      (is (= #{} (:children c))))))
+      (is (= :anchor (:parent c)))
+      (is (= #{} (:children c)))
+      (is (some? (:sci-ctx c))))))
+
+(deftest test-sanitize-for-snapshot
+  (testing "sanitize-for-snapshot strips transient keys"
+    (let [c (cell/make-cell "Survive" {:health 100})
+          sanitized (cell/sanitize-for-snapshot c)]
+      (is (nil? (:sci-ctx sanitized)))
+      (is (= "Survive" (:aim sanitized)))
+      (is (= {:health 100} (:memory sanitized))))))
+
+(deftest test-make-sci-ctx-fork
+  (testing "Forking a SCI context creates an independent copy"
+    (let [parent-ctx (cell/make-sci-ctx)
+          child-ctx (cell/make-sci-ctx parent-ctx)]
+      (is (some? parent-ctx))
+      (is (some? child-ctx))
+      (is (not= parent-ctx child-ctx)))))

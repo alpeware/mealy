@@ -6,10 +6,12 @@
             [clojure.edn :as edn]
             [compojure.core :refer [defroutes GET POST]]
             [compojure.route :as route]
+            [mealy.action.core :as action]
             [mealy.cell.core :as cell]
             [mealy.runtime.jvm.core :as rcore]
             [mealy.runtime.protocols :as p]
             [mealy.runtime.protocols-test :refer [->MemoryEventStore ->MemoryEventBus]]
+            [mealy.subscription.core :as sub]
             [org.httpkit.server :as http-kit]
             [ring.middleware.defaults :refer [wrap-defaults api-defaults]]
             [ring.middleware.resource :refer [wrap-resource]]
@@ -34,6 +36,7 @@
   [state]
   (when state
     (-> state
+        (dissoc :sci-ctx)
         (update :handlers (fn [h] (into {} (map (fn [[k _]] [k "<handler>"]) h))))
         (update :actions (fn [a] (into {} (map (fn [[k _]] [k "<action>"]) a))))
         (update :children #(vec %)))))
@@ -92,7 +95,10 @@
                            (fn [i adapter]
                              [(keyword (str "p" i)) adapter]))
                           adapters)
-          initial-state (cell/make-cell aim {:providers providers})
+          initial-state (-> (cell/make-cell aim {:providers providers})
+                            (update :subscriptions conj :tick))
+          ;; Register action/execute into the cell's SCI context
+          _ (action/register-action-ns! (:sci-ctx initial-state))
           store (->MemoryEventStore (atom {}))
           bus (->MemoryEventBus (atom {}))
           cell-id :dev-cell
@@ -103,10 +109,9 @@
                                  {:workers 1
                                   :cell-in-chan in-chan
                                   :state-atom live-state})
-          heartbeat (async/go-loop []
-                      (async/<! (async/timeout 1000))
-                      (when (async/put! in-chan [:tick {:timestamp (System/currentTimeMillis)}])
-                        (recur)))]
+          ;; Start the :tick subscription using the pluggable subscription system
+          tick-handle (sub/start-subscription {:type :tick :interval-ms 1000}
+                                              {:cell-in-chan in-chan})]
       ;; Consume app events from the node
       (start-app-event-consumer! (:app-out-chan node))
       (reset! app-events [])
@@ -118,7 +123,8 @@
                           :in-chan in-chan
                           :out-chan out-chan
                           :node node
-                          :heartbeat heartbeat})
+                          :subscriptions [{:config {:type :tick :interval-ms 1000}
+                                           :handle tick-handle}]})
       (edn-response {:status :started
                      :aim aim
                      :providers (count providers)}))))
@@ -171,6 +177,9 @@
     (s :timeout 100)
     (reset! server nil)
     (when-let [cs @cell-state]
+      ;; Stop all subscriptions
+      (doseq [{:keys [config handle]} (:subscriptions cs)]
+        (sub/stop-subscription config handle))
       (async/close! (:in-chan cs)))
     (reset! cell-state nil)
     (println "Server stopped.")))

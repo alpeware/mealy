@@ -19,8 +19,8 @@
                       req (llama/build-request url model messages)
                       expected-body (json/generate-string
                                      {:messages messages
-                                      :max_tokens 2048
-                                      :stop ["<|im_end|>" "<|endoftext|>"]
+                                      :max_tokens 262144
+                                      :stop ["<|im_end|>" "<|endoftext|>" "<|end_of_turn|>"]
                                       :stream false})]
                   (and
                    (= (:method req) :post)

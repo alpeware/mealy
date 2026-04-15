@@ -64,13 +64,20 @@
          event-count :event-count} (if snapshot-data
                                      snapshot-data
                                      {:state initial-state :event-count 0})
+        ;; Ensure we have a live sci-ctx even after snapshot recovery
+        ;; (sci-ctx is stripped before snapshots via sanitize-for-snapshot).
+        base-state (if (:sci-ctx base-state)
+                     base-state
+                     (assoc base-state :sci-ctx (:sci-ctx initial-state)))
         all-events (p/get store id)
         new-events (drop event-count all-events)
         final-state (reduce (fn [s e]
                               (:state (reducer/handle-event s e)))
                             base-state
                             new-events)
-        active-policies (clojure.core/get-in final-state [:memory :active-policies] [])]
+        ;; Replay any persisted active-policies into the cell's SCI context.
+        active-policies (clojure.core/get-in final-state [:memory :active-policies] [])
+        sci-ctx (or (:sci-ctx final-state) action/sci-ctx)]
     (doseq [policy active-policies]
-      (sci/eval-string* action/sci-ctx policy))
+      (sci/eval-string* sci-ctx policy))
     final-state))
