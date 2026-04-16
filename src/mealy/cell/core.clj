@@ -1,6 +1,7 @@
 (ns mealy.cell.core
   "Core data structures and definitions for a Mealy Cell."
   (:require [clojure.core.async :as a]
+            [clojure.string :as str]
             [sci.core :as sci]))
 
 ;; Keys that must be excluded from persistence/snapshots because they
@@ -14,12 +15,26 @@
   Optionally copies bindings from a parent SCI context so a child cell
   inherits the parent's learned skills but can evolve independently."
   ([]
-   (sci/init {:namespaces {'clojure.core.async {'put! a/put!}}}))
+   (sci/init {:namespaces {'clojure.core.async {'put! a/put!}
+                           'clojure.string {'join str/join
+                                            'replace str/replace
+                                            'includes? str/includes?
+                                            'upper-case str/upper-case
+                                            'split str/split
+                                            'trim str/trim
+                                            'blank? str/blank?}}}))
   ([parent-sci-ctx]
    ;; Fork: create a fresh context that starts with the same namespace state
    ;; as the parent.  SCI does not expose a native fork, so we create a new
    ;; context with the same namespace map.
-   (let [ctx (sci/init {:namespaces {'clojure.core.async {'put! a/put!}}})]
+   (let [ctx (sci/init {:namespaces {'clojure.core.async {'put! a/put!}
+                                     'clojure.string {'join str/join
+                                                      'replace str/replace
+                                                      'includes? str/includes?
+                                                      'upper-case str/upper-case
+                                                      'split str/split
+                                                      'trim str/trim
+                                                      'blank? str/blank?}}})]
      ;; Copy all user-added vars from the parent into the child.
      ;; This is intentionally shallow — the child starts with the same
      ;; skill set but mutates independently.
@@ -43,11 +58,8 @@
     :observations []
     :policies []
     :phase :idle
-    :subscriptions #{}
-    :handlers {}
-    :actions {}
+    :bus-topics #{}
     :parent :anchor
-    :children #{}
     :sci-ctx (if parent-sci-ctx
                (make-sci-ctx parent-sci-ctx)
                (make-sci-ctx))}))

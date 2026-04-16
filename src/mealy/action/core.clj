@@ -23,27 +23,6 @@
                 (a/put! cell-in-chan [:proposal {:prompt prompt}]))
               {:doc "Proposes new Clojure code to be written and evaluated. Expects a :prompt string detailing what the code should do."}))
 
-(defonce ^:private subscription-registry (atom {}))
-
-(.addMethod execute :start-subscription
-            (with-meta
-              (fn [{:keys [config]} {:keys [cell-in-chan]}]
-                (let [raw-handle ((resolve 'mealy.subscription.core/start-subscription) config {:cell-in-chan cell-in-chan})
-                      handle-id (keyword (gensym "sub-"))]
-                  (swap! subscription-registry assoc handle-id raw-handle)
-                  (a/put! cell-in-chan [:observation {:type :subscription-started :config config :handle handle-id}])))
-              {:doc "Starts a subscription that feeds events into the cell. Expects a :config map (e.g. {:type :tick :interval-ms 1000})."}))
-
-(.addMethod execute :stop-subscription
-            (with-meta
-              (fn [{:keys [config handle]} _env]
-                (if-let [raw-handle (get @subscription-registry handle)]
-                  (do
-                    ((resolve 'mealy.subscription.core/stop-subscription) config raw-handle)
-                    (swap! subscription-registry dissoc handle))
-                  (println "Warning: cannot stop subscription, handle not found:" handle)))
-              {:doc "Stops a running subscription. Expects a :config map and the :handle keyword."}))
-
 ;; Legacy global SCI context — kept for backward compatibility with existing
 ;; tests and the JVM store restore-cell path.  New code should prefer using
 ;; the cell's own :sci-ctx stored in state.

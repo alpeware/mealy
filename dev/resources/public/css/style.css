@@ -763,3 +763,186 @@ body::before {
 .btn-send:active {
   transform: translateY(0);
 }
+
+/* ================================================================
+   POLICIES PANEL
+   ================================================================ */
+
+.policies-panel {
+  grid-column: 1 / -1;
+}
+
+.policy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policy-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: 10px 14px;
+  background: rgba(167, 139, 250, 0.06);
+  border: 1px solid rgba(167, 139, 250, 0.15);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.2s ease;
+}
+
+.policy-item:hover {
+  border-color: rgba(167, 139, 250, 0.3);
+}
+
+.policy-idx {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--gradient-primary);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.policy-text {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+/* ================================================================
+   CONSENT REQUEST PANEL
+   ================================================================ */
+
+.consent-panel {
+  background: rgba(251, 191, 36, 0.05);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), 0 0 30px rgba(251, 191, 36, 0.08);
+  margin-bottom: var(--space-lg);
+  overflow: hidden;
+  animation: consentPulse 3s ease-in-out infinite;
+}
+
+@keyframes consentPulse {
+  0%, 100% { border-color: rgba(251, 191, 36, 0.25); }
+  50%      { border-color: rgba(251, 191, 36, 0.45); }
+}
+
+.consent-panel .panel-header {
+  border-bottom: 1px solid rgba(251, 191, 36, 0.15);
+  padding: var(--space-md) var(--space-lg);
+}
+
+.consent-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent-amber);
+  letter-spacing: 0.08em;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.consent-card {
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid rgba(251, 191, 36, 0.08);
+}
+
+.consent-card:last-child {
+  border-bottom: none;
+}
+
+.consent-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: var(--space-xs);
+}
+
+.consent-text {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  line-height: 1.6;
+  padding: var(--space-sm) 0;
+  font-weight: 500;
+}
+
+.consent-actions {
+  display: flex;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+
+.btn-consent-grant {
+  flex: 1;
+  padding: 10px 20px;
+  background: var(--gradient-start);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.2);
+}
+
+.btn-consent-grant:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px rgba(16, 185, 129, 0.35);
+}
+
+.btn-consent-grant:active {
+  transform: translateY(0);
+}
+
+.btn-consent-reject {
+  padding: 10px 20px;
+  background: rgba(251, 113, 133, 0.1);
+  border: 1px solid rgba(251, 113, 133, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--accent-rose);
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-consent-reject:hover {
+  background: rgba(251, 113, 133, 0.2);
+  transform: translateY(-1px);
+}
+
+.btn-consent-reject:active {
+  transform: translateY(0);
+}
+
+/* ================================================================
+   APP EVENTS PANEL
+   ================================================================ */
+
+.app-events-panel {
+  margin-bottom: var(--space-lg);
+}
+
+.app-event-type {
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 999px;
+  color: var(--accent-indigo);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+

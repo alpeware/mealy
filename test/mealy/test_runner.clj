@@ -7,6 +7,7 @@
             [mealy.intelligence.adapters.gemini-test]
             [mealy.intelligence.adapters.llama-test]
             [mealy.intelligence.core-test]
+            [mealy.intelligence.llm-test]
             [mealy.ooda.prompt-test]
             [mealy.runtime.jvm.bus-test]
             [mealy.runtime.jvm.core-test]

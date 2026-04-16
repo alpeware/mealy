@@ -6,9 +6,7 @@
             [clojure.edn :as edn]
             [compojure.core :refer [defroutes GET POST]]
             [compojure.route :as route]
-            [mealy.action.core :as action]
             [mealy.cell.core :as cell]
-            [mealy.cell.reducer :as reducer]
             [mealy.runtime.jvm.core :as rcore]
             [mealy.runtime.protocols :as p]
             [mealy.runtime.protocols-test :refer [->MemoryEventStore ->MemoryEventBus]]
@@ -37,10 +35,7 @@
   [state]
   (when state
     (-> state
-        (dissoc :sci-ctx)
-        (update :handlers (fn [h] (into {} (map (fn [[k _]] [k "<handler>"]) h))))
-        (update :actions (fn [a] (into {} (map (fn [[k _]] [k "<action>"]) a))))
-        (update :children #(vec %)))))
+        (dissoc :sci-ctx))))
 
 (defn- edn-response
   "Builds a ring response with EDN content type."
@@ -130,10 +125,9 @@
                              [(keyword (str "p" i)) adapter]))
                           adapters)
           initial-state (-> (cell/make-cell aim {:providers providers})
-                            (update :subscriptions conj :tick))
-          ;; Register action/execute and reducer/handle-event into the cell's SCI context
-          _ (action/register-action-ns! (:sci-ctx initial-state))
-          _ (reducer/register-reducer-ns! (:sci-ctx initial-state))
+                            (update :bus-topics conj :tick))
+          ;; SCI context bootstrap (register-*-ns! + eval bootstrap.clj) is now
+          ;; handled automatically by boot/boot-cell! inside start-node.
           store (->MemoryEventStore (atom {}))
           bus (->MemoryEventBus (atom {}))
           cell-id :root
