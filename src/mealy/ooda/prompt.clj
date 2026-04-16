@@ -1,8 +1,15 @@
 (ns mealy.ooda.prompt
-  "Pure functions to compile Cell state into LLM evaluation prompts."
-  (:require [clojure.string :as str]
+  "Pure functions to compile Cell state into LLM prompts.
+   Implements the 'Source Code as Prompt' strategy by inlining the frozen
+   kernel and bootstrap source into the LLM's context window."
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [mealy.action.core :as action]
             [mealy.subscription.core :as sub]))
+
+;; ---------------------------------------------------------------------------
+;; System Prompts (role-specific personas)
+;; ---------------------------------------------------------------------------
 
 (def sociocratic-system-prompt
   "The hardcoded deterministic cognitive routing engine persona."
@@ -10,11 +17,23 @@
 
 (def agentic-system-prompt
   "The generative cognitive engine persona."
-  "You are an autonomous Mealy cell. You must evaluate your State, Aim, and Options and propose zero or more precise Tool Invocations. You must reply strictly with a Clojure EDN array of maps representing tool calls. For example: [{:type :propose :prompt \"write a code eval tool\"}]. Do not include any other text or markdown decoration.")
+  (str "You are an autonomous Mealy Cell — a pure state machine with Sans-IO boundaries.\n"
+       "You are autonomous. The Anchor (human) defines only your Aim and consents to Policies.\n"
+       "You manage everything else: event handling, skill acquisition, resource management,\n"
+       "and specialization through mitosis.\n\n"
+       "You must evaluate your State, Aim, and Options and propose zero or more precise Tool Invocations.\n"
+       "You must reply strictly with a Clojure EDN array of maps representing tool calls.\n"
+       "For example: [{:type :propose :prompt \"write a handler for :rss-check\"}].\n"
+       "Do not include any other text or markdown decoration."))
 
 (def code-gen-system-prompt
   "The pure code generation persona."
-  "You are an expert Clojure software engineer. Your task is to write Clojure code based on the provided prompt and state. Only output valid, pure Clojure code strings. Do not include markdown blocks, explanations, or backticks. IMPORTANT: Since your code is evaluated in a strict SCI sandbox, you must ONLY extend the system by defining methods for the `mealy.action.core/execute` or `mealy.cell.reducer/handle-event` multimethods.")
+  (str "You are an expert Clojure software engineer. Your task is to write Clojure code based on the provided prompt and state.\n"
+       "Only output valid, pure Clojure code strings. Do not include markdown blocks, explanations, or backticks.\n"
+       "IMPORTANT: Since your code is evaluated in a strict SCI sandbox, you must ONLY extend the system by:\n"
+       "- Defining methods: (defmethod mealy.cell.reducer/handle-event :my-event [state event] ...)\n"
+       "- Defining actions: (.addMethod mealy.action.core/execute :my-action [action env] ...)\n"
+       "Available namespaces: mealy.cell.reducer, mealy.action.core, mealy.intelligence.llm, mealy.ooda.prompt, mealy.cell.mitosis, clojure.string, clojure.core.async"))
 
 (def code-review-system-prompt
   "Persona for reviewing candidate code before live execution."
@@ -23,6 +42,10 @@
        "Ensure it strictly extends either `mealy.action.core/execute` or `mealy.cell.reducer/handle-event`.\n"
        "Provide your critique. If the code looks syntactically correct and logical, YOU MUST CONCLUDE WITH THE EXACT WORD 'CONSENT'.\n"
        "If it has logic errors, hallucinates unavailable functions, or violates boundaries, YOU MUST CONCLUDE WITH THE EXACT WORD 'OBJECTION' along with your reasoning."))
+
+;; ---------------------------------------------------------------------------
+;; Dynamic introspection helpers
+;; ---------------------------------------------------------------------------
 
 (defn get-available-tools
   "Dynamically inspects the mealy.action.core/execute multimethod to extract
@@ -33,7 +56,7 @@
                                 :let [docstring (:doc (meta method-fn))
                                       desc (or docstring "No description available.")]]
                             (str "- " dispatch-val ": " desc))]
-    (str "Available Tools:\n" (str/join "\n" tool-descriptions))))
+    (str/join "\n" (sort tool-descriptions))))
 
 (defn get-available-reducer-events
   "Dynamically inspects the mealy.cell.reducer/handle-event multimethod to extract
@@ -44,66 +67,98 @@
           events (for [[dispatch-val _] methods-map
                        :when (keyword? dispatch-val)]
                    (str "- " dispatch-val))]
-      (str "Available Reducer Events:\n" (str/join "\n" events)))
-    "Available Reducer Events:\n- Unknown (Multimethod not loaded)"))
+      (str/join "\n" (sort events)))
+    "- Unknown (Multimethod not loaded)"))
 
-(defn get-available-subscriptions
+(defn get-available-bus-topics
   "Dynamically inspects the start-subscription multimethod to extract
-  the currently registered subscription types and their docstrings."
+  the currently registered source types and their docstrings."
   []
   (let [methods-map (dissoc (methods sub/start-subscription) :default)
         descriptions (for [[dispatch-val method-fn] methods-map
                            :let [docstring (:doc (meta method-fn))
                                  desc (or docstring "No description available.")]]
                        (str "- " dispatch-val ": " desc))]
-    (str "Available Subscriptions:\n" (str/join "\n" descriptions))))
+    (str/join "\n" descriptions)))
+
+;; ---------------------------------------------------------------------------
+;; Unified state serialization
+;; ---------------------------------------------------------------------------
+
+(defn- format-policies
+  "Formats a vector of policies into a numbered list string."
+  [policies]
+  (if (seq policies)
+    (str/join "\n" (map-indexed (fn [i p] (str (inc i) ". " p)) policies))
+    "(none)"))
+
+(defn compile-bootstrap-context
+  "Compiles the Cell's bootstrap source code into a context string.
+   This gives the LLM visibility into its own cognitive architecture."
+  []
+  (if-let [res (io/resource "bootstrap.clj")]
+    (let [source (slurp res)]
+      (str "\nYour OODA Cognitive Pipeline (modifiable via :propose):\n"
+           "```clojure\n" source "\n```"))
+    ""))
+
+(defn compile-state-context
+  "Compiles the Cell's state into a context string for LLM consumption.
+   This is the unified state serializer — all prompt functions use this.
+   Options:
+     :max-observations  — limit recent observations (default: all)
+     :include-memory    — include memory section (default: true)
+     :include-tools     — include tool/event/topic introspection (default: true)
+     :include-bootstrap — include bootstrap source code (default: true)"
+  [state & {:keys [max-observations include-memory include-tools include-bootstrap]
+            :or {include-memory true include-tools true include-bootstrap true}}]
+  (let [{:keys [aim memory observations policies phase bus-topics]} state
+        obs (if max-observations
+              (take-last max-observations observations)
+              observations)]
+    (str "Aim: " aim "\n"
+         "Phase: " (name (or phase :idle)) "\n"
+         "Policies:\n" (format-policies policies) "\n\n"
+         (when include-memory
+           (str "Memory:\n" (pr-str memory) "\n\n"))
+         "Observations:\n" (pr-str obs) "\n"
+         (when (seq bus-topics)
+           (str "\nEventBus topics: "
+                (str/join ", " (map name bus-topics)) "\n"))
+         (when include-tools
+           (str "\nAvailable Tools:\n" (get-available-tools) "\n"
+                "\nAvailable Reducer Events:\n" (get-available-reducer-events) "\n"
+                "\nAvailable Sources (Bus Topics):\n" (get-available-bus-topics)))
+         (when include-bootstrap
+           (compile-bootstrap-context)))))
+
+;; ---------------------------------------------------------------------------
+;; Prompt compilation functions (used by bootstrap.clj handlers)
+;; ---------------------------------------------------------------------------
 
 (defn compile-prompt
   "Compiles the Cell's state into a Consent-based LLM evaluation prompt string.
-  Expects the state map to contain :aim, :memory, :observations, and :policies."
-  [{:keys [aim memory observations policies] :as _state}]
+   Used by the sociocratic consent handler."
+  [state]
   (str "Consent-based LLM evaluation\n\n"
-       "Aim:\n" aim "\n\n"
-       "Policies:\n"
-       (if (seq policies)
-         (str/join "\n" (map-indexed (fn [i p] (str (inc i) ". " p)) policies))
-         "(none)")
-       "\n\n"
-       "Memory:\n" (pr-str memory) "\n\n"
-       "Observations:\n" (pr-str observations) "\n\n"
-       (get-available-tools) "\n\n"
-       (get-available-reducer-events) "\n\n"
-       (get-available-subscriptions)))
+       (compile-state-context state)))
 
 (defn compile-agentic-prompt
-  "Compiles the Cell's state into an Agentic Generative LLM evaluation prompt string."
-  [{:keys [aim memory observations policies] :as _state}]
+  "Compiles the Cell's state into an Agentic Generative LLM evaluation prompt string.
+   Used by the :orient handler to generate action tool invocations."
+  [state]
   (str "Agentic Action Generation\n\n"
-       "Aim:\n" aim "\n\n"
-       "Policies:\n"
-       (if (seq policies)
-         (str/join "\n" (map-indexed (fn [i p] (str (inc i) ". " p)) policies))
-         "(none)")
-       "\n\n"
-       "Memory:\n" (pr-str memory) "\n\n"
-       "Observations:\n" (pr-str (take-last 10 observations)) "\n\n"
-       "Provide action tool invocations to progress the Aim. If none apply, return [].\n\n"
-       (get-available-tools) "\n\n"
-       (get-available-reducer-events) "\n\n"
-       (get-available-subscriptions)))
+       (compile-state-context state :max-observations 10) "\n\n"
+       "Provide action tool invocations to progress the Aim. If none apply, return []."))
 
 (defn compile-policy-evaluation-prompt
   "Compiles an LLM prompt for the cell to evaluate a proposed policy change
   against its current Aim, Memory, and existing Policies."
   [state proposed-policy]
   (str "A policy change has been proposed for your consent.\n\n"
-       "Current Aim:\n" (:aim state) "\n\n"
-       "Current Policies:\n"
-       (if (seq (:policies state))
-         (str/join "\n" (map-indexed (fn [i p] (str (inc i) ". " p)) (:policies state)))
-         "(none)")
-       "\n\n"
-       "Proposed New Policy:\n" proposed-policy "\n\n"
+       "Current Aim: " (:aim state) "\n"
+       "Current Policies:\n" (format-policies (:policies state)) "\n\n"
+       "Proposed New Policy: " proposed-policy "\n\n"
        "Evaluate whether this proposed policy is consistent with the Aim and "
        "does not contradict existing Policies.\n"
        "If acceptable, respond with: CONSENT: [brief reason]\n"
@@ -111,32 +166,14 @@
 
 (defn compile-tap-system-prompt
   "Compiles a system prompt for a tap interaction, giving the LLM context
-   about the cell's aim, current time, phase, policies, subscriptions,
-   and recent observations."
+   about the cell's full state using compile-state-context for consistency.
+   Adds a conversational persona and the current time."
   [state]
-  (let [aim (:aim state)
-        current-time (get-in state [:memory :current-time] "unknown")
-        phase (name (:phase state))
-        policies (:policies state)
-        subs (:subscriptions state)
-        recent-obs (take-last 5 (:observations state))]
-    (str "You are an autonomous Mealy cell. A human colleague is checking in with you.\n\n"
-         "Your aim: " aim "\n"
-         "Current time: " current-time "\n"
-         "Current phase: " phase "\n"
-         (when (seq policies)
-           (str "Active policies:\n"
-                (str/join "\n" (map-indexed (fn [i p] (str (inc i) ". " p)) policies))
-                "\n"))
-         "Current subscriptions: "
-         (if (seq subs)
-           (str/join ", " (map name subs))
-           "(none)")
-         "\n"
-         (when (seq recent-obs)
-           (str "Recent observations:\n"
-                (str/join "\n" (map pr-str recent-obs))
-                "\n"))
-         "\nRespond concisely and helpfully. Be conversational. "
-         "If the user asks you to perform an action or if you think an action is appropriate, you may append a Clojure EDN array of tool maps to your response (e.g. `[{:type :start-subscription :config {:type :tick}}]`).\n\n"
-         (get-available-tools))))
+  (let [current-time (get-in state [:memory :current-time] "unknown")]
+    (str "You are an autonomous Mealy cell. A human colleague is checking in with you.\n"
+         "Current time: " current-time "\n\n"
+         (compile-state-context state :max-observations 5 :include-bootstrap false) "\n\n"
+         "Respond concisely and helpfully. Be conversational. "
+         "If the user asks you to perform an action or if you think an action is appropriate, "
+         "you may append a Clojure EDN array of tool maps to your response "
+         "(e.g. `[{:type :propose :prompt \"...\"}]`).")))

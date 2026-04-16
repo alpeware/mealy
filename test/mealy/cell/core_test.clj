@@ -16,11 +16,8 @@
                        (empty? (:observations c))
                        (vector? (:policies c))
                        (empty? (:policies c))
-                       (= #{} (:subscriptions c))
-                       (= {} (:handlers c))
-                       (= {} (:actions c))
+                       (= #{} (:bus-topics c))
                        (= :anchor (:parent c))
-                       (= #{} (:children c))
                        (some? (:sci-ctx c))))))
 
 (deftest test-cell-creation
@@ -30,11 +27,8 @@
       (is (= {:health 100} (:memory c)))
       (is (= [] (:observations c)))
       (is (= [] (:policies c)))
-      (is (= #{} (:subscriptions c)))
-      (is (= {} (:handlers c)))
-      (is (= {} (:actions c)))
+      (is (= #{} (:bus-topics c)))
       (is (= :anchor (:parent c)))
-      (is (= #{} (:children c)))
       (is (some? (:sci-ctx c))))))
 
 (deftest test-sanitize-for-snapshot

@@ -39,7 +39,7 @@
                  :policies ["Only use pure functions"]}
           result (prompt/compile-prompt state)]
       (is (string? result))
-      (is (str/includes? result "Aim:\nTo calculate fibonacci numbers"))
+      (is (str/includes? result "Aim: To calculate fibonacci numbers"))
       (is (str/includes? result "Memory:"))
       (is (str/includes? result "history"))
       (is (str/includes? result "calculated 1, 1, 2"))
@@ -58,8 +58,8 @@
           result (prompt/compile-prompt state)]
       (is (str/includes? result "Policies:\n(none)")))))
 
-(deftest compile-prompt-tools-and-subscriptions-test
-  (testing "Compilation includes dynamic tool and subscription awareness"
+(deftest compile-prompt-tools-and-bus-topics-test
+  (testing "Compilation includes dynamic tool and source awareness"
     (let [state {:aim "To be self-aware"
                  :memory {}
                  :observations []
@@ -69,7 +69,17 @@
       (is (str/includes? result "Available Tools:"))
       (is (str/includes? result ":think"))
       (is (str/includes? result ":eval"))
-      (is (str/includes? result "Available Subscriptions:")))))
+      (is (str/includes? result "Available Sources (Bus Topics):")))))
+
+(deftest compile-prompt-includes-bootstrap-test
+  (testing "Compilation includes the bootstrap source by default"
+    (let [state {:aim "Test"
+                 :memory {}
+                 :observations []
+                 :policies []}
+          result (prompt/compile-prompt state)]
+      (is (str/includes? result "OODA Cognitive Pipeline"))
+      (is (str/includes? result "defmethod reducer/handle-event")))))
 
 (defspec ^{:doc "test-compile-prompt-returns-string"} compile-prompt-returns-string 100
   (prop/for-all [state gen-state]
@@ -82,22 +92,82 @@
   (testing "The system prompt instructs evaluation against Policies alongside Aim and Memory"
     (is (str/includes? prompt/sociocratic-system-prompt "Policies"))))
 
-(deftest compile-tap-system-prompt-subscriptions-test
-  (testing "Tap system prompt includes current subscriptions from state"
+(deftest compile-tap-system-prompt-test
+  (testing "Tap system prompt uses compile-state-context for consistent output"
     (let [state {:aim "Observe"
                  :memory {:current-time "Monday"}
                  :phase :idle
-                 :observations []
-                 :policies []
-                 :subscriptions #{:tick}}
+                 :observations [{:a 1}]
+                 :policies ["Be polite"]
+                 :bus-topics #{:tick}}
           result (prompt/compile-tap-system-prompt state)]
-      (is (str/includes? result "Current subscriptions: tick"))))
-  (testing "Tap system prompt shows (none) when no subscriptions"
+      (is (str/includes? result "A human colleague is checking in"))
+      (is (str/includes? result "Current time: Monday"))
+      (is (str/includes? result "Aim: Observe"))
+      (is (str/includes? result "Phase: idle"))
+      (is (str/includes? result "1. Be polite"))
+      (is (str/includes? result "EventBus topics: tick"))
+      (is (str/includes? result "Available Tools:"))
+      (is (str/includes? result ":think"))
+      ;; Tap excludes bootstrap to save tokens for conversation
+      (is (not (str/includes? result "OODA Cognitive Pipeline")))))
+  (testing "Tap system prompt works with empty bus topics"
     (let [state {:aim "Observe"
                  :memory {}
                  :phase :idle
                  :observations []
                  :policies []
-                 :subscriptions #{}}
+                 :bus-topics #{}}
           result (prompt/compile-tap-system-prompt state)]
-      (is (str/includes? result "Current subscriptions: (none)")))))
+      (is (str/includes? result "Aim: Observe"))
+      ;; No EventBus line when empty
+      (is (not (str/includes? result "EventBus topics:"))))))
+
+(deftest compile-state-context-test
+  (testing "Unified state context serializes all key fields"
+    (let [state {:aim "Test"
+                 :memory {:key "value"}
+                 :observations [{:a 1} {:b 2}]
+                 :policies ["p1"]
+                 :phase :idle}
+          result (prompt/compile-state-context state)]
+      (is (str/includes? result "Aim: Test"))
+      (is (str/includes? result "Phase: idle"))
+      (is (str/includes? result "1. p1"))
+      (is (str/includes? result ":key"))
+      (is (str/includes? result "{:a 1}"))
+      ;; Includes bootstrap by default
+      (is (str/includes? result "OODA Cognitive Pipeline"))))
+  (testing "max-observations limits output"
+    (let [state {:aim "Test"
+                 :memory {}
+                 :observations [{:a 1} {:b 2} {:c 3}]
+                 :policies []
+                 :phase :idle}
+          result (prompt/compile-state-context state :max-observations 1)]
+      (is (str/includes? result "{:c 3}"))
+      (is (not (str/includes? result "{:a 1}")))))
+  (testing "include-bootstrap false excludes bootstrap source"
+    (let [state {:aim "Test"
+                 :memory {}
+                 :observations []
+                 :policies []
+                 :phase :idle}
+          result (prompt/compile-state-context state :include-bootstrap false)]
+      (is (not (str/includes? result "OODA Cognitive Pipeline")))))
+  (testing "bus-topics are included when present"
+    (let [state {:aim "Test"
+                 :memory {}
+                 :observations []
+                 :policies []
+                 :phase :idle
+                 :bus-topics #{:tick :rss}}
+          result (prompt/compile-state-context state)]
+      (is (str/includes? result "EventBus topics:")))))
+
+(deftest compile-bootstrap-context-test
+  (testing "Loads and wraps bootstrap.clj source"
+    (let [result (prompt/compile-bootstrap-context)]
+      (is (string? result))
+      (is (str/includes? result "OODA Cognitive Pipeline"))
+      (is (str/includes? result "defmethod reducer/handle-event")))))

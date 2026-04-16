@@ -4,6 +4,7 @@
   (:require [clojure.core.async :as async :refer [go-loop <! >!]]
             [hato.client :as hc]
             [mealy.action.core :as action]
+            [mealy.cell.boot :as boot]
             [mealy.cell.core :as cell]
             [mealy.cell.reducer :as reducer]
             [mealy.runtime.jvm.store :as store]
@@ -55,6 +56,46 @@
                   (p/publish event-bus topic event)))
               {:doc "Publishes an event to a topic on the EventBus for inter-cell consent requests."}))
 
+;; ---------------------------------------------------------------------------
+;; Subscription (Source) action handlers — IO boundary concerns
+;; ---------------------------------------------------------------------------
+
+(defonce ^:private subscription-registry (atom {}))
+
+(.addMethod action/execute :start-subscription
+            (with-meta
+              (fn [{:keys [config]} {:keys [cell-in-chan]}]
+                (let [raw-handle ((requiring-resolve 'mealy.subscription.core/start-subscription) config {:cell-in-chan cell-in-chan})
+                      handle-id (keyword (gensym "sub-"))]
+                  (swap! subscription-registry assoc handle-id raw-handle)
+                  (async/put! cell-in-chan [:observation {:type :subscription-started :config config :handle handle-id}])))
+              {:doc "Starts a subscription that feeds events into the cell. Expects a :config map (e.g. {:type :tick :interval-ms 1000})."}))
+
+(.addMethod action/execute :stop-subscription
+            (with-meta
+              (fn [{:keys [config handle]} _env]
+                (if-let [raw-handle (get @subscription-registry handle)]
+                  (do
+                    ((requiring-resolve 'mealy.subscription.core/stop-subscription) config raw-handle)
+                    (swap! subscription-registry dissoc handle))
+                  (println "Warning: cannot stop subscription, handle not found:" handle)))
+              {:doc "Stops a running subscription. Expects a :config map and the :handle keyword."}))
+
+;; ---------------------------------------------------------------------------
+;; :spawn-cell — LLM-driven mitosis
+;; ---------------------------------------------------------------------------
+
+(.addMethod action/execute :spawn-cell
+            (with-meta
+              (fn [{:keys [child-aim partition-keys bootstrap-mode]} {:keys [cell-in-chan]}]
+                (let [mode (or bootstrap-mode :fresh)]
+                  (async/put! cell-in-chan
+                              [:observation {:type :spawn-request
+                                             :child-aim child-aim
+                                             :partition-keys (set (or partition-keys []))
+                                             :bootstrap-mode mode}])))
+              {:doc "Requests Cell mitosis. The runtime creates a new child node with the given aim. :bootstrap-mode can be :fresh (canonical bootstrap) or :inherit (parent's bootstrap)."}))
+
 (defn- start-worker-pool
   "Starts a generic worker pool to drain `out-chan` and execute actions via `mealy.action.core/execute`."
   [out-chan opts]
@@ -88,6 +129,9 @@
                                  :cell-sci-ctx cell-sci-ctx
                                  :event-bus event-bus)
          recovered-state (store/restore-cell event-store id initial-state)]
+
+     ;; Boot the Cell's SCI context: register bootstrap namespaces + eval bootstrap.clj
+     (boot/boot-cell! (:sci-ctx recovered-state))
 
      (p/register event-bus id)
      (start-worker-pool out-chan opts-with-extras)

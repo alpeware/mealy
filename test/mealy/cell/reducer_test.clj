@@ -1,11 +1,29 @@
 (ns mealy.cell.reducer-test
-  "Tests for mealy.cell.reducer"
+  "Tests for mealy.cell.reducer (frozen kernel) and bootstrap-defined handlers."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [mealy.cell.boot :as boot]
             [mealy.cell.core :as cell]
-            [mealy.cell.reducer :as reducer]))
+            [mealy.cell.reducer :as reducer]
+            [sci.core :as sci]))
+
+;; ---------------------------------------------------------------------------
+;; Helper: create a cell with bootstrapped OODA handlers
+;; ---------------------------------------------------------------------------
+
+(defn- boot-test-cell
+  "Creates a cell and evaluates the bootstrap script into its SCI context,
+  installing all OODA event handlers."
+  [aim memory]
+  (let [c (cell/make-cell aim memory)]
+    (boot/boot-cell! (:sci-ctx c))
+    c))
+
+;; ===========================================================================
+;; FROZEN KERNEL TESTS — These test handlers that live in reducer.clj
+;; ===========================================================================
 
 (defspec ^{:doc "Generative invariant: handle-event always returns a valid state and actions vector."}
   test-handle-event-invariant 100
@@ -23,7 +41,7 @@
                        (contains? (:state result) :phase)))))
 
 ;; ---------------------------------------------------------------------------
-;; :observation — now accumulates only, no longer triggers orient
+;; :observation — now accumulates only, no longer triggers orient (FROZEN)
 ;; ---------------------------------------------------------------------------
 
 (deftest test-handle-observation-accumulates
@@ -49,71 +67,7 @@
       (is (empty? actions)))))
 
 ;; ---------------------------------------------------------------------------
-;; :orient — triggers evaluation or reflex
-;; ---------------------------------------------------------------------------
-
-(deftest test-handle-orient-idle
-  (testing "[:orient] while :idle with observations transitions to :evaluating and yields :http-request"
-    (let [c (-> (cell/make-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
-                (update :observations conj {:temp 98.6}))
-          event [:orient {}]
-          result (reducer/handle-event c event)
-          new-state (:state result)
-          actions (:actions result)]
-      (is (= :evaluating (:phase new-state)))
-      (is (= :p1 (get-in new-state [:memory :active-provider])))
-      (is (= 1 (count actions)))
-      (is (= :http-request (:type (first actions))))
-      (is (= :orient-evaluated (:callback-event (first actions)))))))
-
-(deftest test-handle-orient-reflex
-  (testing "[:orient] matching a reflex yields the reflex command and remains :idle"
-    (let [c (-> (cell/make-cell "Survive" {:reflexes {:cpu-temp-high {:type :throttle-cpu}}})
-                (update :observations conj {:type :cpu-temp-high :value 95}))
-          event [:orient {}]
-          result (reducer/handle-event c event)
-          new-state (:state result)
-          actions (:actions result)]
-      (is (= :idle (:phase new-state)))
-      (is (= 1 (count actions)))
-      (is (= :throttle-cpu (:type (first actions)))))))
-
-;; ---------------------------------------------------------------------------
-;; :consent-evaluated
-;; ---------------------------------------------------------------------------
-
-(deftest test-handle-consent-evaluated-positive
-  (testing "[:consent-evaluated data] with positive consent transitions to :acting and yields no commands"
-    (let [c (assoc (cell/make-cell "Survive" {:active-provider :p1
-                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
-                   :phase :evaluating)
-          json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I CONSENT to this action\"}]}}],\"usageMetadata\":{\"totalTokenCount\":15}}"
-          event [:consent-evaluated {:response {:status 200 :body json-body}}]
-          result (reducer/handle-event c event)
-          new-state (:state result)
-          actions (:actions result)]
-      (is (= :acting (:phase new-state)))
-      (is (= 0 (count actions)))
-      (is (= 985 (get-in new-state [:memory :providers :p1 :budget])))
-      (is (nil? (get-in new-state [:memory :active-provider]))))))
-
-(deftest test-handle-consent-evaluated-objection
-  (testing "[:consent-evaluated data] with objection transitions to :idle and yields no actions"
-    (let [c (assoc (cell/make-cell "Survive" {:active-provider :p1
-                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
-                   :phase :evaluating)
-          json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I have an OBJECTION to this action\"}]}}],\"usageMetadata\":{\"totalTokenCount\":10}}"
-          event [:consent-evaluated {:response {:status 200 :body json-body}}]
-          result (reducer/handle-event c event)
-          new-state (:state result)
-          actions (:actions result)]
-      (is (= :idle (:phase new-state)))
-      (is (empty? actions))
-      (is (= 990 (get-in new-state [:memory :providers :p1 :budget])))
-      (is (nil? (get-in new-state [:memory :active-provider]))))))
-
-;; ---------------------------------------------------------------------------
-;; :evaluation-error
+;; :evaluation-error (FROZEN)
 ;; ---------------------------------------------------------------------------
 
 (deftest test-handle-evaluation-error
@@ -129,7 +83,7 @@
       (is (empty? actions)))))
 
 ;; ---------------------------------------------------------------------------
-;; Unknown event
+;; Unknown event (FROZEN :default)
 ;; ---------------------------------------------------------------------------
 
 (deftest test-handle-unknown-event
@@ -140,13 +94,81 @@
       (is (= c (:state result)))
       (is (= [] (:actions result))))))
 
+;; ===========================================================================
+;; BOOTSTRAP HANDLER TESTS — These test handlers defined in bootstrap.clj
+;; ===========================================================================
+
+;; ---------------------------------------------------------------------------
+;; :orient — triggers evaluation or reflex
+;; ---------------------------------------------------------------------------
+
+(deftest test-handle-orient-idle
+  (testing "[:orient] while :idle with observations transitions to :evaluating and yields :http-request"
+    (let [c (-> (boot-test-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+                (update :observations conj {:temp 98.6}))
+          event [:orient {}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          actions (:actions result)]
+      (is (= :evaluating (:phase new-state)))
+      (is (= :p1 (get-in new-state [:memory :active-provider])))
+      (is (= 1 (count actions)))
+      (is (= :http-request (:type (first actions))))
+      (is (= :orient-evaluated (:callback-event (first actions)))))))
+
+(deftest test-handle-orient-reflex
+  (testing "[:orient] matching a reflex yields the reflex command and remains :idle"
+    (let [c (-> (boot-test-cell "Survive" {:reflexes {:cpu-temp-high {:type :throttle-cpu}}})
+                (update :observations conj {:type :cpu-temp-high :value 95}))
+          event [:orient {}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          actions (:actions result)]
+      (is (= :idle (:phase new-state)))
+      (is (= 1 (count actions)))
+      (is (= :throttle-cpu (:type (first actions)))))))
+
+;; ---------------------------------------------------------------------------
+;; :consent-evaluated
+;; ---------------------------------------------------------------------------
+
+(deftest test-handle-consent-evaluated-positive
+  (testing "[:consent-evaluated data] with positive consent transitions to :acting and yields no commands"
+    (let [c (assoc (boot-test-cell "Survive" {:active-provider :p1
+                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+                   :phase :evaluating)
+          json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I CONSENT to this action\"}]}}],\"usageMetadata\":{\"totalTokenCount\":15}}"
+          event [:consent-evaluated {:response {:status 200 :body json-body}}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          actions (:actions result)]
+      (is (= :acting (:phase new-state)))
+      (is (= 0 (count actions)))
+      (is (= 985 (get-in new-state [:memory :providers :p1 :budget])))
+      (is (nil? (get-in new-state [:memory :active-provider]))))))
+
+(deftest test-handle-consent-evaluated-objection
+  (testing "[:consent-evaluated data] with objection transitions to :idle and yields no actions"
+    (let [c (assoc (boot-test-cell "Survive" {:active-provider :p1
+                                              :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+                   :phase :evaluating)
+          json-body "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I have an OBJECTION to this action\"}]}}],\"usageMetadata\":{\"totalTokenCount\":10}}"
+          event [:consent-evaluated {:response {:status 200 :body json-body}}]
+          result (reducer/handle-event c event)
+          new-state (:state result)
+          actions (:actions result)]
+      (is (= :idle (:phase new-state)))
+      (is (empty? actions))
+      (is (= 990 (get-in new-state [:memory :providers :p1 :budget])))
+      (is (nil? (get-in new-state [:memory :active-provider]))))))
+
 ;; ---------------------------------------------------------------------------
 ;; :proposal — General proposal (replaces :propose-policy)
 ;; ---------------------------------------------------------------------------
 
 (deftest test-handle-proposal
   (testing "[:proposal data] event appends prompt to :pending-proposals, transitions to :evaluating, yields :http-request"
-    (let [c (cell/make-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+    (let [c (boot-test-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
           event [:proposal {:prompt "(defmethod execute :new-skill ...)"}]
           result (reducer/handle-event c event)
           new-state (:state result)
@@ -160,7 +182,7 @@
 
 (deftest test-handle-proposal-evaluated-positive
   (testing "[:proposal-evaluated data] with positive consent pops the proposal, transitions to :generating-code, yields :http-request"
-    (let [c (assoc (cell/make-cell "Survive" {:pending-proposals ["(defmethod execute :new-skill ...)"]
+    (let [c (assoc (boot-test-cell "Survive" {:pending-proposals ["(defmethod execute :new-skill ...)"]
                                               :active-provider :p1
                                               :providers {:p1 {:adapter-type :gemini :status :healthy :budget 10000 :complexity :high}}})
                    :phase :evaluating)
@@ -177,7 +199,7 @@
 
 (deftest test-handle-proposal-evaluated-objection
   (testing "[:proposal-evaluated data] with objection transitions to :idle, pops the proposal, yields no actions"
-    (let [c (assoc (cell/make-cell "Survive" {:pending-proposals ["(defmethod execute :new-skill ...)"]
+    (let [c (assoc (boot-test-cell "Survive" {:pending-proposals ["(defmethod execute :new-skill ...)"]
                                               :active-provider :p1
                                               :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
                    :phase :evaluating)
@@ -196,7 +218,7 @@
 
 (deftest test-handle-propose-policy-legacy
   (testing "[:propose-policy data] redirects to :proposal"
-    (let [c (cell/make-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+    (let [c (boot-test-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
           event [:propose-policy {:prompt "(defmethod execute :new-skill ...)"}]
           result (reducer/handle-event c event)
           new-state (:state result)
@@ -209,7 +231,7 @@
 
 (deftest test-handle-policy-consent-evaluated-positive-legacy
   (testing "[:policy-consent-evaluated data] redirects to :proposal-evaluated"
-    (let [c (assoc (cell/make-cell "Survive" {:pending-proposals ["(defmethod execute :new-skill ...)"]
+    (let [c (assoc (boot-test-cell "Survive" {:pending-proposals ["(defmethod execute :new-skill ...)"]
                                               :active-provider :p1
                                               :providers {:p1 {:adapter-type :gemini :status :healthy :budget 10000 :complexity :high}}})
                    :phase :evaluating)
@@ -230,7 +252,7 @@
 
 (deftest test-handle-policy-change-phase1-self-evaluate
   (testing "[:policy-change] enters :evaluating-policy and routes LLM request for self-evaluation"
-    (let [c (cell/make-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
+    (let [c (boot-test-cell "Survive" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
           event [:policy-change {:policy "Always respond in English"}]
           result (reducer/handle-event c event)
           new-state (:state result)
@@ -243,7 +265,7 @@
 
 (deftest test-handle-policy-self-evaluated-consent-root
   (testing "[:policy-self-evaluated] with cell consent on root (:anchor parent) enters :awaiting-consent and emits :app-event"
-    (let [c (-> (cell/make-cell "Survive" {:pending-policy-change "Always respond in English"
+    (let [c (-> (boot-test-cell "Survive" {:pending-policy-change "Always respond in English"
                                            :active-provider :p1
                                            :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
                 (assoc :phase :evaluating-policy))
@@ -261,7 +283,7 @@
 
 (deftest test-handle-policy-self-evaluated-consent-child
   (testing "[:policy-self-evaluated] with cell consent on child cell enters :awaiting-consent and emits :bus-publish"
-    (let [c (-> (cell/make-cell "Survive" {:pending-policy-change "Limit tokens"
+    (let [c (-> (boot-test-cell "Survive" {:pending-policy-change "Limit tokens"
                                            :active-provider :p1
                                            :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
                 (assoc :phase :evaluating-policy
@@ -278,7 +300,7 @@
 
 (deftest test-handle-policy-self-evaluated-objection
   (testing "[:policy-self-evaluated] with cell objection aborts and returns to :idle"
-    (let [c (-> (cell/make-cell "Survive" {:pending-policy-change "Bad policy"
+    (let [c (-> (boot-test-cell "Survive" {:pending-policy-change "Bad policy"
                                            :active-provider :p1
                                            :providers {:p1 {:adapter-type :gemini :status :healthy :budget 1000 :complexity :high}}})
                 (assoc :phase :evaluating-policy))
@@ -291,7 +313,7 @@
 
 (deftest test-handle-consent-granted
   (testing "[:consent-granted] while :awaiting-consent adds the policy and returns to :idle"
-    (let [c (-> (cell/make-cell "Survive" {:pending-policy-change "Always respond in English"})
+    (let [c (-> (boot-test-cell "Survive" {:pending-policy-change "Always respond in English"})
                 (assoc :phase :awaiting-consent))
           event [:consent-granted {}]
           result (reducer/handle-event c event)
@@ -302,7 +324,7 @@
 
 (deftest test-handle-consent-rejected
   (testing "[:consent-rejected] while :awaiting-consent discards change and returns to :idle"
-    (let [c (-> (cell/make-cell "Survive" {:pending-policy-change "Always respond in English"})
+    (let [c (-> (boot-test-cell "Survive" {:pending-policy-change "Always respond in English"})
                 (assoc :phase :awaiting-consent))
           event [:consent-rejected {}]
           result (reducer/handle-event c event)
@@ -311,26 +333,35 @@
       (is (empty? (:policies new-state)))
       (is (nil? (get-in new-state [:memory :pending-policy-change]))))))
 
-;; ---------------------------------------------------------------------------
-;; parse-consent
-;; ---------------------------------------------------------------------------
+;; ===========================================================================
+;; FROZEN KERNEL ENFORCEMENT TESTS
+;; ===========================================================================
 
-(def gen-consent-response
-  "Generator for strings that should parse as consent."
-  (gen/fmap (fn [s] (str "CONSENT: " s)) gen/string-alphanumeric))
+(deftest frozen-kernel-rejects-overwrites-via-sci
+  (testing "SCI code cannot overwrite frozen dispatch values via the guarded proxy"
+    (let [c (cell/make-cell "Test" {})
+          ctx (:sci-ctx c)]
+      (boot/boot-cell! ctx)
+      (doseq [frozen-key [:default :observation :evaluation-error :tick]]
+        (is (thrown? Exception
+                     (sci/eval-string* ctx
+                                       (str "(defmethod mealy.cell.reducer/handle-event " frozen-key
+                                            " [s _] {:state s :actions []})")))
+            (str "Should reject defmethod on frozen key: " frozen-key))))))
 
-(def gen-objection-response
-  "Generator for strings that should parse as an objection."
-  (gen/fmap (fn [s] (str "OBJECTION: " s)) gen/string-alphanumeric))
+(deftest frozen-kernel-allows-new-handlers-via-sci
+  (testing "SCI code CAN define handlers for non-frozen event types"
+    (let [c (cell/make-cell "Test" {})
+          ctx (:sci-ctx c)]
+      (boot/boot-cell! ctx)
+      ;; Define a new handler via SCI
+      (sci/eval-string* ctx
+                        "(defmethod mealy.cell.reducer/handle-event :custom-event
+                           [state [_ data]]
+                           {:state (assoc state :custom-data data) :actions []})")
+      ;; Verify it works
+      (let [result (reducer/handle-event c [:custom-event {:msg "hello"}])
+            new-state (:state result)]
+        (is (= {:msg "hello"} (:custom-data new-state)))
+        (is (= [] (:actions result)))))))
 
-(defspec ^{:doc "test-parse-consent-identifies-consent"} parse-consent-identifies-consent 100
-  (prop/for-all [response gen-consent-response]
-                (let [result (reducer/parse-consent response)]
-                  (and (true? (:consent result))
-                       (= response (:response result))))))
-
-(defspec ^{:doc "test-parse-consent-identifies-objection"} parse-consent-identifies-objection 100
-  (prop/for-all [response gen-objection-response]
-                (let [result (reducer/parse-consent response)]
-                  (and (false? (:consent result))
-                       (= response (:response result))))))

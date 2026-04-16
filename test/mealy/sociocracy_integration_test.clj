@@ -12,7 +12,6 @@
   (testing "End-to-end Sociocratic self-modification loop using JVM Runtime"
     (let [proposal-code "(require '[mealy.action.core :as action])\n(defmethod action/execute :echo-test [_ env] (clojure.core.async/put! (:test-chan env) [:observation {:type :echo-success}]))"
           initial-state (cell/make-cell "Learn to echo" {:providers {:p1 {:adapter-type :gemini :status :healthy :budget 100000 :complexity :high}}})
-          _ (action/register-action-ns! (:sci-ctx initial-state))
           in-chan (async/chan 100)
           out-chan (async/chan 100)
           test-chan (async/chan 100)

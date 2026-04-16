@@ -136,6 +136,30 @@
                     (poll-app-events!))
          :error-handler (fn [_] nil)}))))
 
+(defn ^:private consent-grant!
+  "Sends a [:consent-granted {:policy ...}] event to approve a pending policy."
+  [policy]
+  (POST "/api/cell/event"
+    {:body (pr-str [:consent-granted {:policy policy}])
+     :headers {"Content-Type" "application/edn"}
+     :response-format :text
+     :handler (fn [_]
+                (poll-state!)
+                (poll-app-events!))
+     :error-handler (fn [_] nil)}))
+
+(defn ^:private consent-reject!
+  "Sends a [:consent-rejected {}] event to reject a pending policy."
+  []
+  (POST "/api/cell/event"
+    {:body (pr-str [:consent-rejected {}])
+     :headers {"Content-Type" "application/edn"}
+     :response-format :text
+     :handler (fn [_]
+                (poll-state!)
+                (poll-app-events!))
+     :error-handler (fn [_] nil)}))
+
 ;; ---------------------------------------------------------------------------
 ;; Components
 ;; ---------------------------------------------------------------------------
@@ -295,6 +319,78 @@
        {:on-click send-tap!}
        "👋 Tap"]]]))
 
+(defn ^:private policies-panel
+  "Renders the cell's active policies as a dedicated panel."
+  []
+  (let [policies (get-in (:cell-state @app-state) [:root :policies] [])]
+    [:div.panel.policies-panel
+     [:div.panel-header
+      [:h2 "📜 Policies"]
+      [:span.event-count (str (count policies) " active")]]
+     [:div.panel-body
+      (if (seq policies)
+        [:div.policy-list
+         (doall
+          (map-indexed
+           (fn [i p]
+             ^{:key i}
+             [:div.policy-item
+              [:span.policy-idx (str (inc i))]
+              [:span.policy-text (str p)]])
+           policies))]
+        [:div.placeholder "No policies defined yet."])]]))
+
+(defn ^:private consent-request-panel
+  "Renders pending consent requests from app-events, with Grant/Reject buttons."
+  []
+  (let [app-evts (:app-events @app-state)
+        consent-reqs (filter #(= (:event-type %) :consent-request) app-evts)
+        phase (get-in (:cell-state @app-state) [:root :phase])]
+    (when (and (seq consent-reqs) (= phase :awaiting-consent))
+      [:div.consent-panel
+       [:div.panel-header
+        [:h2 "⚖️ Consent Required"]
+        [:span.consent-badge "PENDING"]]
+       [:div.panel-body
+        (doall
+         (map-indexed
+          (fn [i req]
+            ^{:key i}
+            [:div.consent-card
+             [:div.consent-policy
+              [:span.consent-label "Proposed Policy:"]
+              [:p.consent-text (:policy req)]]
+             [:div.consent-actions
+              [:button.btn-consent-grant
+               {:on-click #(consent-grant! (:policy req))}
+               "✓ Grant Consent"]
+              [:button.btn-consent-reject
+               {:on-click consent-reject!}
+               "✗ Reject"]]])
+          consent-reqs))]])))
+
+(defn ^:private app-events-panel
+  "Renders all app events in a dedicated panel."
+  []
+  (let [app-evts (:app-events @app-state)
+        ;; Exclude consent-requests (shown separately) and tap-responses (shown in chat)
+        display-evts (remove #(contains? #{:consent-request :tap-response} (:event-type %))
+                             app-evts)]
+    (when (seq display-evts)
+      [:div.panel.app-events-panel
+       [:div.panel-header
+        [:h2 "📡 App Events"]
+        [:span.event-count (str (count display-evts) " events")]]
+       [:div.panel-body.event-list
+        (doall
+         (map-indexed
+          (fn [i evt]
+            ^{:key i}
+            [:div.event-row
+             [:span.app-event-type (name (or (:event-type evt) :unknown))]
+             [:code.event-data (pr-str (dissoc evt :event-type :type))]])
+          (reverse display-evts)))]])))
+
 (defn ^:private dashboard-view
   "Renders the live dashboard with cell state tree, event log, chat, and event injection."
   []
@@ -308,7 +404,16 @@
      ;; Chat panel (full width above the grid)
      [chat-panel]
 
+     ;; Consent requests (full width, attention-grabbing)
+     [consent-request-panel]
+
+     ;; App events (full width)
+     [app-events-panel]
+
      [:div.dashboard-grid
+      ;; Policies panel
+      [policies-panel]
+
       ;; State panel
       [:div.panel.state-panel
        [:div.panel-header
