@@ -66,7 +66,7 @@
                  :policies []}
           result (prompt/compile-prompt state)]
       (is (string? result))
-      (is (str/includes? result "Available Tools:"))
+      (is (str/includes? result "Available Actions:"))
       (is (str/includes? result ":think"))
       (is (str/includes? result ":eval"))
       (is (str/includes? result "Available Sources (Bus Topics):")))))
@@ -95,7 +95,8 @@
 (deftest compile-tap-system-prompt-test
   (testing "Tap system prompt uses compile-state-context for consistent output"
     (let [state {:aim "Observe"
-                 :memory {:current-time "Monday"}
+                 :memory {:current-time "Monday"
+                          :chat [{:role "user" :content "hello"}]}
                  :phase :idle
                  :observations [{:a 1}]
                  :policies ["Be polite"]
@@ -107,10 +108,12 @@
       (is (str/includes? result "Phase: idle"))
       (is (str/includes? result "1. Be polite"))
       (is (str/includes? result "EventBus topics: tick"))
-      (is (str/includes? result "Available Tools:"))
+      (is (str/includes? result "Available Actions:"))
       (is (str/includes? result ":think"))
       ;; Tap excludes bootstrap to save tokens for conversation
-      (is (not (str/includes? result "OODA Cognitive Pipeline")))))
+      (is (not (str/includes? result "OODA Cognitive Pipeline")))
+      ;; Chat is excluded from memory (already passed as messages)
+      (is (not (str/includes? result "hello")))))
   (testing "Tap system prompt works with empty bus topics"
     (let [state {:aim "Observe"
                  :memory {}

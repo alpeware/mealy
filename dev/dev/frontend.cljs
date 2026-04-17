@@ -21,7 +21,7 @@
            :error nil
            :aim "Learn to autonomously summarize incoming observations."
            :adapters [{:adapter-type :gemini
-                       :model "gemini-2.5-flash"
+                       :model "gemini-3.1-flash-lite-preview"
                        :api-key ""
                        :url ""
                        :status :healthy
@@ -341,33 +341,29 @@
         [:div.placeholder "No policies defined yet."])]]))
 
 (defn ^:private consent-request-panel
-  "Renders pending consent requests from app-events, with Grant/Reject buttons."
+  "Renders the most recent pending consent request with Grant/Reject buttons."
   []
   (let [app-evts (:app-events @app-state)
         consent-reqs (filter #(= (:event-type %) :consent-request) app-evts)
+        pending-req (last consent-reqs)
         phase (get-in (:cell-state @app-state) [:root :phase])]
-    (when (and (seq consent-reqs) (= phase :awaiting-consent))
+    (when (and pending-req (= phase :awaiting-consent))
       [:div.consent-panel
        [:div.panel-header
         [:h2 "⚖️ Consent Required"]
         [:span.consent-badge "PENDING"]]
        [:div.panel-body
-        (doall
-         (map-indexed
-          (fn [i req]
-            ^{:key i}
-            [:div.consent-card
-             [:div.consent-policy
-              [:span.consent-label "Proposed Policy:"]
-              [:p.consent-text (:policy req)]]
-             [:div.consent-actions
-              [:button.btn-consent-grant
-               {:on-click #(consent-grant! (:policy req))}
-               "✓ Grant Consent"]
-              [:button.btn-consent-reject
-               {:on-click consent-reject!}
-               "✗ Reject"]]])
-          consent-reqs))]])))
+        [:div.consent-card
+         [:div.consent-policy
+          [:span.consent-label "Proposed Policy:"]
+          [:p.consent-text (:policy pending-req)]]
+         [:div.consent-actions
+          [:button.btn-consent-grant
+           {:on-click #(consent-grant! (:policy pending-req))}
+           "✓ Grant Consent"]
+          [:button.btn-consent-reject
+           {:on-click consent-reject!}
+           "✗ Reject"]]]]])))
 
 (defn ^:private app-events-panel
   "Renders all app events in a dedicated panel."

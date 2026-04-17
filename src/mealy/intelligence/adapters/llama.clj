@@ -18,8 +18,9 @@
 
 (defn parse-response
   "Pure function to parse the HTTP response map from Ollama."
-  [{:keys [status body]}]
-  (let [parsed-body (try
+  [{:keys [body] :as response-map}]
+  (let [status (or (:status response-map) 500)
+        parsed-body (try
                       (json/parse-string body true)
                       (catch Exception _
                         body))]

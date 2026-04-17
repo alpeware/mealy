@@ -33,17 +33,24 @@
        :actions []})))
 
 (defn parse-llm-response
-  "Pure function to route the response to the correct parser based on the active provider."
+  "Pure function to route the response to the correct parser based on the active provider.
+   When the provider is unknown (e.g., :active-provider was cleared by a concurrent response),
+   auto-detects format by trying Gemini first, then falling back to raw body extraction."
   [state response-data]
   (let [provider-id (get-in state [:memory :active-provider])
-        provider (get-in state [:memory :providers provider-id])]
-    (case (:adapter-type provider)
+        provider (get-in state [:memory :providers provider-id])
+        adapter-type (:adapter-type provider)]
+    (case adapter-type
       :gemini (gemini/parse-response response-data)
       :llama (llama/parse-response response-data)
-      ;; fallback to avoid nil errors, treat as generic text or error
+      ;; Fallback: provider unknown (race condition). Try Gemini format first,
+      ;; since it's the most structured. If that fails, use raw body.
       (if (:error response-data)
         {:error true :reason (:reason response-data) :backoff-ms 1000}
-        {:response (-> response-data :body) :tokens 0}))))
+        (let [gemini-result (try (gemini/parse-response response-data) (catch Exception _ nil))]
+          (if (and gemini-result (:response gemini-result) (not (:error gemini-result)))
+            gemini-result
+            {:response (-> response-data :body) :tokens 0}))))))
 
 (defn update-provider-state
   "Pure function to apply budget deductions or backoffs based on parsed response."
@@ -73,12 +80,15 @@
      :response response-str}))
 
 (defn extract-edn-array
-  "Helper to safely extract an EDN array from an LLM response."
+  "Helper to safely extract an EDN array of action maps from an LLM response.
+   Filters out any entries that are not maps with a :type keyword."
   [s]
   (try
     (let [m (re-find #"(?s)\[.*\]" (or s ""))]
       (if m
         (let [parsed (edn/read-string m)]
-          (if (vector? parsed) parsed []))
+          (if (vector? parsed)
+            (filterv #(and (map? %) (:type %)) parsed)
+            []))
         []))
     (catch Exception _ [])))

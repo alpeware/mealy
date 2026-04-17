@@ -24,6 +24,10 @@
   [_]
   false)
 
+(defmethod persist-event? :heartbeat
+  [_]
+  false)
+
 (.addMethod action/execute :http-request
             (with-meta
               (fn [{:keys [req callback-event]} env]
@@ -47,14 +51,14 @@
                                  (async/put! cell-in-chan [callback-event {:error true :status (:status resp) :body (:body resp)}]))
                                (async/put! cell-in-chan [callback-event {:error true :reason (.getMessage cause)}])))
                            nil))))))
-              {:doc "Intercepts and executes :http-request actions using hato asynchronously."}))
+              {:doc "HTTP-request: async HTTP call via hato. Params: :req (hato request map with :url, :method, optional :headers, :body), :callback-event (keyword — the event type to emit with the response). Example: {:type :http-request :req {:url \"https://api.example.com/data\" :method :get} :callback-event :api-response}"}))
 
 (.addMethod action/execute :bus-publish
             (with-meta
               (fn [{:keys [topic event]} {:keys [event-bus]}]
                 (when event-bus
                   (p/publish event-bus topic event)))
-              {:doc "Publishes an event to a topic on the EventBus for inter-cell consent requests."}))
+              {:doc "Bus-publish: publishes an event to a topic on the EventBus for inter-cell communication. Params: :topic (keyword — target cell/circle id), :event (map with :type and payload). Example: {:type :bus-publish :topic :parent-circle :event {:type :consent-request :from :child-1 :policy \"Be concise\"}}"}))
 
 ;; ---------------------------------------------------------------------------
 ;; Subscription (Source) action handlers — IO boundary concerns
@@ -69,7 +73,7 @@
                       handle-id (keyword (gensym "sub-"))]
                   (swap! subscription-registry assoc handle-id raw-handle)
                   (async/put! cell-in-chan [:observation {:type :subscription-started :config config :handle handle-id}])))
-              {:doc "Starts a subscription that feeds events into the cell. Expects a :config map (e.g. {:type :tick :interval-ms 1000})."}))
+              {:doc "Start-subscription: registers a new IO source that feeds events into the cell. Params: :config (map with :type and source-specific keys). Example: {:type :start-subscription :config {:type :tick :interval-ms 5000}}"}))
 
 (.addMethod action/execute :stop-subscription
             (with-meta
@@ -79,7 +83,7 @@
                     ((requiring-resolve 'mealy.subscription.core/stop-subscription) config raw-handle)
                     (swap! subscription-registry dissoc handle))
                   (println "Warning: cannot stop subscription, handle not found:" handle)))
-              {:doc "Stops a running subscription. Expects a :config map and the :handle keyword."}))
+              {:doc "Stop-subscription: stops a running IO source. Params: :config (original config map), :handle (keyword returned by :start-subscription via :subscription-started observation). Example: {:type :stop-subscription :config {:type :tick :interval-ms 5000} :handle :sub-123}"}))
 
 ;; ---------------------------------------------------------------------------
 ;; :spawn-cell — LLM-driven mitosis
@@ -94,7 +98,7 @@
                                              :child-aim child-aim
                                              :partition-keys (set (or partition-keys []))
                                              :bootstrap-mode mode}])))
-              {:doc "Requests Cell mitosis. The runtime creates a new child node with the given aim. :bootstrap-mode can be :fresh (canonical bootstrap) or :inherit (parent's bootstrap)."}))
+              {:doc "Spawn-cell: requests cell mitosis to create a specialized child. Params: :child-aim (string), :partition-keys (optional set of memory keys to transfer), :bootstrap-mode (:fresh for canonical bootstrap or :inherit for parent's handlers). Example: {:type :spawn-cell :child-aim \"Monitor RSS feeds\" :partition-keys #{:feeds} :bootstrap-mode :fresh}"}))
 
 (defn- start-worker-pool
   "Starts a generic worker pool to drain `out-chan` and execute actions via `mealy.action.core/execute`."

@@ -15,13 +15,19 @@
             (with-meta
               (fn [{:keys [prompt]} {:keys [cell-in-chan]}]
                 (a/put! cell-in-chan [:think-request {:prompt prompt}]))
-              {:doc "Delegates a cognitive task to the LLM. Expects a :prompt string."}))
+              {:doc "Think: delegates a cognitive query to the LLM. Params: :prompt (string). Example: {:type :think :prompt \"What should I do next?\"}"}))
 
 (.addMethod execute :propose
             (with-meta
               (fn [{:keys [prompt]} {:keys [cell-in-chan]}]
                 (a/put! cell-in-chan [:proposal {:prompt prompt}]))
-              {:doc "Proposes new Clojure code to be written and evaluated. Expects a :prompt string detailing what the code should do."}))
+              {:doc "Propose: triggers the sociocratic code-gen pipeline (consent → generate → dry-run → review → eval). Params: :prompt (string describing what code to write). Example: {:type :propose :prompt \"Write a handler for :rss-check that fetches an RSS feed\"}"}))
+
+(.addMethod execute :inject-event
+            (with-meta
+              (fn [{:keys [event]} {:keys [cell-in-chan]}]
+                (a/put! cell-in-chan event))
+              {:doc "Inject-event: puts an event vector directly onto the cell's input channel. Params: :event (vector [event-type data-map]). Example: {:type :inject-event :event [:observation {:type :note :data \"something happened\"}]}"}))
 
 ;; Legacy global SCI context — kept for backward compatibility with existing
 ;; tests and the JVM store restore-cell path.  New code should prefer using
@@ -50,7 +56,7 @@
                       (a/put! cell-in-chan [:observation {:type :eval-success :result (pr-str result) :code code}]))
                     (catch Exception e
                       (a/put! cell-in-chan [:evaluation-error {:reason (.getMessage e) :code code}])))))
-              {:doc "Evaluates sandboxed Clojure code dynamically for skill acquisition."}))
+              {:doc "Eval: evaluates Clojure code in the SCI sandbox. On success emits [:observation {:type :eval-success}], on failure emits [:evaluation-error]. Params: :code (string of valid Clojure). Example: {:type :eval :code \"(defmethod reducer/handle-event :my-event [s e] {:state s :actions []})\"}"}))
 
 (.addMethod execute :dry-run-eval
             (with-meta
@@ -75,4 +81,4 @@
                     (a/put! cell-in-chan [:dry-run-success {:code code}])
                     (catch Exception e
                       (a/put! cell-in-chan [:evaluation-error {:reason (.getMessage e) :code code}])))))
-              {:doc "Evaluates code in a sandbox fork to catch errors before committing live."}))
+              {:doc "Dry-run-eval: evaluates code in a forked SCI sandbox to verify it compiles without side effects. On success emits [:dry-run-success {:code ...}]. Params: :code (string). Used internally by the :propose pipeline."}))

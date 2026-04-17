@@ -227,7 +227,8 @@
 (defmethod reducer/handle-event :think-request
   [state [_ event-data]]
   (llm/route-llm-request state
-                         [{:role "user" :content (:prompt event-data)}]
+                         [{:role "system" :content (prompt/compile-think-system-prompt state)}
+                          {:role "user" :content (:prompt event-data)}]
                          :low 500 :thought-result))
 
 (defmethod reducer/handle-event :thought-result
@@ -259,7 +260,7 @@
         system-prompt (prompt/compile-tap-system-prompt new-state)
         messages (into [{:role "system" :content system-prompt}]
                        updated-chat)]
-    (llm/route-llm-request new-state messages :low 1000 :tap-response)))
+    (llm/route-llm-request new-state messages :high 1000 :tap-response)))
 
 (defmethod reducer/handle-event :tap-response
   [state [_ event-data]]
@@ -281,3 +282,14 @@
                         :content reply}]
         {:state new-state
          :actions (into [app-action] tools-edn)}))))
+
+;; ---------------------------------------------------------------------------
+;; :heartbeat — Time-based trigger (extensible, fired by frozen :tick)
+;; ---------------------------------------------------------------------------
+;; The Cell can override this handler to add periodic tasks such as
+;; feed checks, health monitoring, or scheduled proposals.
+
+(defmethod reducer/handle-event :heartbeat
+  [state [_ _event-data]]
+  {:state state
+   :actions []})
