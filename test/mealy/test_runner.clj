@@ -1,6 +1,7 @@
 (ns mealy.test-runner
   (:require [clojure.test :refer [run-all-tests]]
             [mealy.action.core-test]
+            [mealy.action.spec-test]
             [mealy.cell.core-test]
             [mealy.cell.mitosis-test]
             [mealy.cell.reducer-test]

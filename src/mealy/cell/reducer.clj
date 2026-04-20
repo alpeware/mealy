@@ -12,8 +12,7 @@
     :observation      — Core invariant: accumulate observations
     :evaluation-error — Self-healing error recovery (non-overridable)
     :tick             — Source-fed heartbeat (requires Java interop)"
-  (:require [mealy.cell.mitosis :as mitosis]
-            [mealy.intelligence.llm :as llm]
+  (:require [mealy.intelligence.llm :as llm]
             [mealy.ooda.prompt :as prompt]))
 
 ;; ---------------------------------------------------------------------------
@@ -130,12 +129,9 @@
   [state [_ event-data]]
   (let [ts (:timestamp event-data)
         human-time (epoch-ms->local-str ts)
-        updated-state (assoc-in state [:memory :current-time] human-time)
-        thresholds (get-in updated-state [:policies :mitosis-thresholds] {:max-observations 5})
-        reached? (mitosis/threshold-reached? updated-state thresholds)]
-    (if reached?
-      (let [{:keys [parent child]} (mitosis/divide updated-state #{:chat} "Specialized child cell")]
-        {:state (assoc parent :observations [])
-         :actions [{:type :app-event :event-type :spawn-child :child-state child}]})
-      {:state updated-state
-       :actions []})))
+        updated-state (-> state
+                          (assoc-in [:memory :current-time] human-time)
+                          (assoc-in [:memory :timestamp] ts))]
+    {:state updated-state
+     :actions [{:type :inject-event
+                :event [:heartbeat {:timestamp ts :time human-time}]}]}))

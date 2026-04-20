@@ -2,6 +2,8 @@
   "The Action Registry Foundation. Provides an extensible execution router
   for Von Neumann style action execution and self-modification."
   (:require [clojure.core.async :as a]
+            [clojure.set :as set]
+            [mealy.action.spec :as spec]
             [sci.core :as sci]))
 
 (defmulti execute
@@ -13,15 +15,21 @@
 
 (.addMethod execute :think
             (with-meta
-              (fn [{:keys [prompt]} {:keys [cell-in-chan]}]
-                (a/put! cell-in-chan [:think-request {:prompt prompt}]))
-              {:doc "Delegates a cognitive task to the LLM. Expects a :prompt string."}))
+              (fn [{:keys [prompt complexity]} {:keys [cell-in-chan]}]
+                (a/put! cell-in-chan [:think-request {:prompt prompt :complexity (or complexity :medium)}]))
+              {:doc "Think: delegates a cognitive query to the LLM. Params: :prompt (string), :complexity (optional, :low/:medium/:high, default :medium). Example: {:type :think :prompt \"What should I do next?\" :complexity :high}"}))
 
 (.addMethod execute :propose
             (with-meta
               (fn [{:keys [prompt]} {:keys [cell-in-chan]}]
                 (a/put! cell-in-chan [:proposal {:prompt prompt}]))
-              {:doc "Proposes new Clojure code to be written and evaluated. Expects a :prompt string detailing what the code should do."}))
+              {:doc "Propose: triggers the sociocratic code-gen pipeline (consent → generate → dry-run → review → eval). Params: :prompt (string describing what code to write). Example: {:type :propose :prompt \"Write a handler for :rss-check that fetches an RSS feed\"}"}))
+
+(.addMethod execute :inject-event
+            (with-meta
+              (fn [{:keys [event]} {:keys [cell-in-chan]}]
+                (a/put! cell-in-chan event))
+              {:doc "Inject-event: puts an event vector directly onto the cell's input channel. Params: :event (vector [event-type data-map]). Example: {:type :inject-event :event [:observation {:type :note :data \"something happened\"}]}"}))
 
 ;; Legacy global SCI context — kept for backward compatibility with existing
 ;; tests and the JVM store restore-cell path.  New code should prefer using
@@ -50,11 +58,36 @@
                       (a/put! cell-in-chan [:observation {:type :eval-success :result (pr-str result) :code code}]))
                     (catch Exception e
                       (a/put! cell-in-chan [:evaluation-error {:reason (.getMessage e) :code code}])))))
-              {:doc "Evaluates sandboxed Clojure code dynamically for skill acquisition."}))
+              {:doc "Eval: evaluates Clojure code in the SCI sandbox. On success emits [:observation {:type :eval-success}], on failure emits [:evaluation-error]. Params: :code (string of valid Clojure). Example: {:type :eval :code \"(defmethod reducer/handle-event :my-event [s e] {:state s :actions []})\"}"}))
+
+(defn- validate-new-handlers
+  "After a dry-run eval, detect newly registered handler dispatch values
+   on mock-handle vs real-handle. Invoke each new handler with the cell's
+   current state and validate the returned :actions against the spec registry.
+   Returns nil on success, or a vector of error maps."
+  [mock-handle real-handle cell-state]
+  (let [new-dispatches (set/difference
+                        (set (keys (methods mock-handle)))
+                        (set (keys (methods real-handle))))
+        seed-state (or cell-state {:aim "dry-run" :memory {} :observations []
+                                   :policies [] :phase :idle})]
+    (when (seq new-dispatches)
+      (let [errors (for [dispatch-val new-dispatches
+                         :let [handler (.getMethod mock-handle dispatch-val)
+                               result (try
+                                        (handler seed-state [dispatch-val {:dry-run true}])
+                                        (catch Exception _ nil))]
+                         :when (and (map? result) (:actions result))
+                         :let [spec-errors (spec/validate-actions (:actions result))]
+                         :when spec-errors]
+                     {:dispatch-val dispatch-val
+                      :errors spec-errors})]
+        (when (seq errors)
+          (vec errors))))))
 
 (.addMethod execute :dry-run-eval
             (with-meta
-              (fn [{:keys [code]} {:keys [cell-in-chan cell-sci-ctx]}]
+              (fn [{:keys [code cell-state]} {:keys [cell-in-chan cell-sci-ctx]}]
                 (let [parent-ctx (or cell-sci-ctx sci-ctx)
                       clone-ctx (sci/fork parent-ctx)
 
@@ -72,7 +105,14 @@
 
                   (try
                     (sci/eval-string* clone-ctx code)
-                    (a/put! cell-in-chan [:dry-run-success {:code code}])
+                    ;; Code compiled — now validate action specs on new handlers
+                    (if-let [spec-errors (validate-new-handlers mock-handle real-handle cell-state)]
+                      (let [error-msg (str "Action spec validation failed:\n"
+                                           (pr-str spec-errors))]
+                        (a/put! cell-in-chan [:evaluation-error {:reason error-msg :code code}]))
+                      (a/put! cell-in-chan [:dry-run-success {:code code}]))
                     (catch Exception e
                       (a/put! cell-in-chan [:evaluation-error {:reason (.getMessage e) :code code}])))))
-              {:doc "Evaluates code in a sandbox fork to catch errors before committing live."}))
+              {:doc "Dry-run-eval: evaluates code in a forked SCI sandbox to verify it compiles and that
+ any new handler methods produce spec-valid actions. On success emits [:dry-run-success {:code ...}].
+ On spec failure emits [:evaluation-error]. Params: :code (string), :cell-state (optional, cell's current state for validation). Used internally by the :propose pipeline."}))

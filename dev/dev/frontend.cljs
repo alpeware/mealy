@@ -9,34 +9,65 @@
             [reagent.dom.client :as rdc]))
 
 ;; ---------------------------------------------------------------------------
+;; localStorage persistence
+;; ---------------------------------------------------------------------------
+
+(def ^:private storage-key "mealy-cell-config")
+
+(defn ^:private save-config!
+  "Persists aim and adapters to localStorage as EDN."
+  [aim adapters]
+  (try
+    (.setItem js/localStorage storage-key
+              (pr-str {:aim aim :adapters adapters}))
+    (catch :default _ nil)))
+
+(defn ^:private load-config
+  "Loads saved aim and adapters from localStorage. Returns nil if absent or corrupt."
+  []
+  (try
+    (when-let [raw (.getItem js/localStorage storage-key)]
+      (let [parsed (reader/read-string raw)]
+        (when (and (map? parsed) (:aim parsed) (:adapters parsed))
+          parsed)))
+    (catch :default _ nil)))
+
+;; ---------------------------------------------------------------------------
 ;; App state
 ;; ---------------------------------------------------------------------------
 
+(def ^:private default-adapters
+  [{:adapter-type :gemini
+    :model "gemini-3.1-flash-lite-preview"
+    :api-key ""
+    :url ""
+    :status :healthy
+    :budget 10000
+    :complexity :high}
+   {:adapter-type :llama
+    :model "llama3"
+    :api-key ""
+    :url "http://localhost:11434"
+    :status :healthy
+    :budget 50000
+    :complexity :medium}])
+
+(def ^:private default-aim
+  "Learn to autonomously summarize incoming observations.")
+
 (defonce ^{:doc "Top-level Reagent atom holding all dashboard UI state."}
   app-state
-  (r/atom {:view :config ;; :config | :dashboard
-           :cell-state nil
-           :events []
-           :app-events []
-           :error nil
-           :aim "Learn to autonomously summarize incoming observations."
-           :adapters [{:adapter-type :gemini
-                       :model "gemini-2.5-flash"
-                       :api-key ""
-                       :url ""
-                       :status :healthy
-                       :budget 10000
-                       :complexity :high}
-                      {:adapter-type :llama
-                       :model "llama3"
-                       :api-key ""
-                       :url "http://localhost:11434"
-                       :status :healthy
-                       :budget 50000
-                       :complexity :medium}]
-           :event-input "[:observation {:type :test :data \"hello\"}]"
-           :tap-input ""
-           :polling? false}))
+  (let [saved (load-config)]
+    (r/atom {:view :config ;; :config | :dashboard
+             :cell-state nil
+             :events []
+             :app-events []
+             :error nil
+             :aim (or (:aim saved) default-aim)
+             :adapters (or (:adapters saved) default-adapters)
+             :event-input "[:observation {:type :test :data \"hello\"}]"
+             :tap-input ""
+             :polling? false})))
 
 ;; ---------------------------------------------------------------------------
 ;; API helpers
@@ -84,9 +115,12 @@
                     2000)))
 
 (defn ^:private start-cell!
-  "POSTs the aim and adapter configuration as EDN to the backend to start a cell."
+  "POSTs the aim and adapter configuration as EDN to the backend to start a cell.
+   Saves the config to localStorage for convenience on next visit."
   []
   (let [{:keys [aim adapters]} @app-state]
+    ;; Persist to localStorage before starting
+    (save-config! aim adapters)
     (POST "/api/cell/start"
       {:body (pr-str {:aim aim :adapters adapters})
        :headers {"Content-Type" "application/edn"}
@@ -341,33 +375,29 @@
         [:div.placeholder "No policies defined yet."])]]))
 
 (defn ^:private consent-request-panel
-  "Renders pending consent requests from app-events, with Grant/Reject buttons."
+  "Renders the most recent pending consent request with Grant/Reject buttons."
   []
   (let [app-evts (:app-events @app-state)
         consent-reqs (filter #(= (:event-type %) :consent-request) app-evts)
+        pending-req (last consent-reqs)
         phase (get-in (:cell-state @app-state) [:root :phase])]
-    (when (and (seq consent-reqs) (= phase :awaiting-consent))
+    (when (and pending-req (= phase :awaiting-consent))
       [:div.consent-panel
        [:div.panel-header
         [:h2 "⚖️ Consent Required"]
         [:span.consent-badge "PENDING"]]
        [:div.panel-body
-        (doall
-         (map-indexed
-          (fn [i req]
-            ^{:key i}
-            [:div.consent-card
-             [:div.consent-policy
-              [:span.consent-label "Proposed Policy:"]
-              [:p.consent-text (:policy req)]]
-             [:div.consent-actions
-              [:button.btn-consent-grant
-               {:on-click #(consent-grant! (:policy req))}
-               "✓ Grant Consent"]
-              [:button.btn-consent-reject
-               {:on-click consent-reject!}
-               "✗ Reject"]]])
-          consent-reqs))]])))
+        [:div.consent-card
+         [:div.consent-policy
+          [:span.consent-label "Proposed Policy:"]
+          [:p.consent-text (:policy pending-req)]]
+         [:div.consent-actions
+          [:button.btn-consent-grant
+           {:on-click #(consent-grant! (:policy pending-req))}
+           "✓ Grant Consent"]
+          [:button.btn-consent-reject
+           {:on-click consent-reject!}
+           "✗ Reject"]]]]])))
 
 (defn ^:private app-events-panel
   "Renders all app events in a dedicated panel."

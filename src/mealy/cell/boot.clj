@@ -27,6 +27,7 @@
   ;; Intelligence LLM helpers
   (swap! (:env ctx) assoc-in [:namespaces 'mealy.intelligence.llm]
          {'route-llm-request     llm/route-llm-request
+          'reroute-on-failure    llm/reroute-on-failure
           'parse-llm-response    llm/parse-llm-response
           'update-provider-state llm/update-provider-state
           'parse-consent         llm/parse-consent
@@ -37,10 +38,13 @@
           'agentic-system-prompt        prompt/agentic-system-prompt
           'code-gen-system-prompt       prompt/code-gen-system-prompt
           'code-review-system-prompt    prompt/code-review-system-prompt
+          'compile-state-context        prompt/compile-state-context
+          'compile-bootstrap-context    prompt/compile-bootstrap-context
           'compile-prompt               prompt/compile-prompt
           'compile-agentic-prompt       prompt/compile-agentic-prompt
           'compile-policy-evaluation-prompt prompt/compile-policy-evaluation-prompt
-          'compile-tap-system-prompt    prompt/compile-tap-system-prompt})
+          'compile-tap-system-prompt    prompt/compile-tap-system-prompt
+          'compile-think-system-prompt  prompt/compile-think-system-prompt})
   ;; Mitosis helpers
   (swap! (:env ctx) assoc-in [:namespaces 'mealy.cell.mitosis]
          {'threshold-reached? mitosis/threshold-reached?

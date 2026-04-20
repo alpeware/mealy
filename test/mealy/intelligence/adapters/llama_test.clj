@@ -29,7 +29,18 @@
                    (= (:body req) expected-body)))))
 
 (deftest parse-response-test
-  (testing "Successful response parsing"
+  (testing "Successful response parsing (pre-parsed EDN body)"
+    (let [body {:id "chatcmpl-123" :object "chat.completion" :created 1677652288 :model "llama3.2"
+                :choices [{:index 0 :message {:role "assistant" :content "The sky is blue"}
+                           :logprobs nil :finish_reason "stop"}]
+                :usage {:prompt_tokens 9 :completion_tokens 12 :total_tokens 21}}
+          resp {:status 200 :body body}
+          parsed (llama/parse-response resp)]
+      (is (= (:response parsed) "The sky is blue"))
+      (is (= (:tokens parsed) 21))
+      (is (nil? (:error parsed)))))
+
+  (testing "Successful response parsing (legacy JSON string body)"
     (let [json-body "{\"id\":\"chatcmpl-123\",\"object\":\"chat.completion\",\"created\":1677652288,\"model\":\"llama3.2\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The sky is blue\"},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":12,\"total_tokens\":21}}"
           resp {:status 200 :body json-body}
           parsed (llama/parse-response resp)]
@@ -37,9 +48,9 @@
       (is (= (:tokens parsed) 21))
       (is (nil? (:error parsed)))))
 
-  (testing "Error response parsing (e.g., 400 Bad Request)"
-    (let [json-body "{\"error\":\"model not found\"}"
-          resp {:status 400 :body json-body}
+  (testing "Error response parsing (pre-parsed)"
+    (let [body {:error "model not found"}
+          resp {:status 400 :body body}
           parsed (llama/parse-response resp)]
       (is (= (:error parsed) true))
       (is (= (:reason parsed) "model not found"))

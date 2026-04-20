@@ -10,40 +10,98 @@
 
 (defn route-llm-request
   "Pure function to select the best provider, construct an HTTP request action,
-  and update the state with the selected provider."
-  [state messages required-complexity estimated-tokens callback-event]
-  (let [providers (get-in state [:memory :providers] {})
-        best-provider-id (intel/select-best-provider providers required-complexity estimated-tokens)]
-    (if best-provider-id
-      (let [provider (get providers best-provider-id)
-            url (:url provider)
-            model (:model provider)
-            api-key (:api-key provider)
-            req (case (:adapter-type provider)
-                  :gemini (gemini/build-request api-key model messages)
-                  :llama (llama/build-request url model messages))
-            new-state (assoc-in state [:memory :active-provider] best-provider-id)]
-        {:state new-state
-         :actions [{:type :http-request
-                    :req req
-                    :callback-event callback-event}]})
-      {:state (-> state
-                  (assoc :phase :idle)
-                  (assoc :last-error "No available provider for request"))
-       :actions []})))
+   and update the state with the selected provider.
+   Accepts an optional opts map with:
+     :fallback — strategy for failure recovery:
+       :downgrade (default) — on failure, try the next-best provider
+       :retry               — on failure, retry the same provider with backoff
+     :exclude-providers — set of provider IDs to skip (used internally for downgrade chains)"
+  ([state messages required-complexity estimated-tokens callback-event]
+   (route-llm-request state messages required-complexity estimated-tokens callback-event {}))
+  ([state messages required-complexity estimated-tokens callback-event opts]
+   (let [providers (get-in state [:memory :providers] {})
+         exclude (get opts :exclude-providers #{})
+         eligible (into {} (remove (fn [[k _]] (exclude k)) providers))
+         fallback-strategy (get opts :fallback :downgrade)
+         best-provider-id (intel/select-best-provider eligible required-complexity estimated-tokens)]
+     (if best-provider-id
+       (let [provider (get providers best-provider-id)
+             url (:url provider)
+             model (:model provider)
+             api-key (:api-key provider)
+             req (case (:adapter-type provider)
+                   :gemini (gemini/build-request api-key model messages)
+                   :llama (llama/build-request url model messages))
+             ;; Store routing context so response handlers can reroute on failure
+             new-state (-> state
+                           (assoc-in [:memory :active-provider] best-provider-id)
+                           (assoc-in [:memory :llm-routing-context]
+                                     {:messages messages
+                                      :required-complexity required-complexity
+                                      :estimated-tokens estimated-tokens
+                                      :callback-event callback-event
+                                      :fallback fallback-strategy
+                                      :exclude-providers (conj exclude best-provider-id)}))]
+         {:state new-state
+          :actions [{:type :http-request
+                     :req req
+                     :callback-event callback-event}]})
+       {:state (-> state
+                   (assoc :phase :idle)
+                   (assoc :last-error "No available provider for request")
+                   (update :memory dissoc :llm-routing-context))
+        :actions []}))))
+
+(defn reroute-on-failure
+  "When an LLM response indicates an error, attempt to reroute using the stored
+   routing context and fallback strategy. Returns nil if no reroute is possible
+   (caller should handle the error normally)."
+  [state]
+  (when-let [ctx (get-in state [:memory :llm-routing-context])]
+    (let [{:keys [messages required-complexity estimated-tokens
+                  callback-event fallback exclude-providers]} ctx]
+      (case fallback
+        :downgrade
+        (let [result (route-llm-request state messages required-complexity
+                                        estimated-tokens callback-event
+                                        {:fallback :downgrade
+                                         :exclude-providers (or exclude-providers #{})})]
+          (when (seq (:actions result))
+            result))
+
+        :retry
+        ;; Retry emits an inject-event to let the backoff timer expire, then re-routes
+        ;; The caller (update-provider-state) already set the backoff on the provider
+        {:state (update state :memory dissoc :llm-routing-context)
+         :actions [{:type :inject-event
+                    :event [:retry-llm-request ctx]}]}
+
+        ;; Unknown strategy — no reroute
+        nil))))
 
 (defn parse-llm-response
-  "Pure function to route the response to the correct parser based on the active provider."
+  "Pure function to route the response to the correct parser based on the active provider.
+   When the provider is unknown (e.g., :active-provider was cleared by a concurrent response),
+   auto-detects format by trying Gemini first, then falling back to raw body extraction.
+   Note: :body in response-data may be pre-parsed EDN (via :http-request auto-parsing)
+   or a raw string."
   [state response-data]
   (let [provider-id (get-in state [:memory :active-provider])
-        provider (get-in state [:memory :providers provider-id])]
-    (case (:adapter-type provider)
+        provider (get-in state [:memory :providers provider-id])
+        adapter-type (:adapter-type provider)]
+    (case adapter-type
       :gemini (gemini/parse-response response-data)
       :llama (llama/parse-response response-data)
-      ;; fallback to avoid nil errors, treat as generic text or error
+      ;; Fallback: provider unknown (race condition). Try Gemini format first,
+      ;; since it's the most structured. If that fails, use raw body.
       (if (:error response-data)
         {:error true :reason (:reason response-data) :backoff-ms 1000}
-        {:response (-> response-data :body) :tokens 0}))))
+        (let [gemini-result (try (gemini/parse-response response-data) (catch Exception _ nil))]
+          (if (and gemini-result (:response gemini-result) (not (:error gemini-result)))
+            gemini-result
+            (let [body (:body response-data)]
+              {:response (if (string? body) body (pr-str body))
+               :tokens 0})))))))
 
 (defn update-provider-state
   "Pure function to apply budget deductions or backoffs based on parsed response."
@@ -73,12 +131,15 @@
      :response response-str}))
 
 (defn extract-edn-array
-  "Helper to safely extract an EDN array from an LLM response."
+  "Helper to safely extract an EDN array of action maps from an LLM response.
+   Filters out any entries that are not maps with a :type keyword."
   [s]
   (try
     (let [m (re-find #"(?s)\[.*\]" (or s ""))]
       (if m
         (let [parsed (edn/read-string m)]
-          (if (vector? parsed) parsed []))
+          (if (vector? parsed)
+            (filterv #(and (map? %) (:type %)) parsed)
+            []))
         []))
     (catch Exception _ [])))

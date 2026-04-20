@@ -54,9 +54,8 @@
                           (< (:budget provider-state) estimated-tokens))
         ;; A provider in backoff or without enough budget gets a negative score
                     (< score 0)
-        ;; A healthy provider with enough budget gets a positive score
-        ;; and score is higher if complexities match
-                    (>= score 0)))))
+        ;; A healthy provider with enough budget always gets a positive score
+                    (> score 0)))))
 
 (deftest select-best-provider-test
   (testing "selects the best provider"
@@ -67,3 +66,28 @@
       ;; p3 doesn't have enough budget (requires 100, has 50).
       ;; p1 is healthy and has budget, so it should be selected despite being :low.
       (is (= :p1 (core/select-best-provider provider-states :medium 100))))))
+
+(deftest select-best-provider-fallback-ordering-test
+  (testing "when :high is in backoff, :medium is chosen over :low"
+    (let [provider-states {:p0 {:status :backoff :budget 1000000000 :complexity :high
+                                :backoff-until (+ (System/currentTimeMillis) 60000)}
+                           :p1 {:status :healthy :budget 100000000 :complexity :medium}
+                           :p2 {:status :healthy :budget 99996069 :complexity :low}}]
+      (is (= :p1 (core/select-best-provider provider-states :high 1000)))))
+
+  (testing "when :high and :medium are in backoff, :low is chosen"
+    (let [provider-states {:p0 {:status :backoff :budget 1000000 :complexity :high}
+                           :p1 {:status :backoff :budget 1000000 :complexity :medium}
+                           :p2 {:status :healthy :budget 1000000 :complexity :low}}]
+      (is (= :p2 (core/select-best-provider provider-states :high 1000)))))
+
+  (testing ":medium is preferred over :low when requesting :high"
+    (let [scores-medium (core/score-provider {:status :healthy :budget 1000 :complexity :medium} :high 100)
+          scores-low (core/score-provider {:status :healthy :budget 1000 :complexity :low} :high 100)]
+      (is (> scores-medium scores-low)
+          ":medium should score higher than :low as fallback for :high")))
+
+  (testing "exact match always beats fallback"
+    (let [scores-exact (core/score-provider {:status :healthy :budget 1000 :complexity :high} :high 100)
+          scores-over (core/score-provider {:status :healthy :budget 1000 :complexity :medium} :high 100)]
+      (is (> scores-exact scores-over)))))
