@@ -35,8 +35,20 @@
        "- Defining action executors: (defmethod mealy.action.core/execute :my-action [action env] ...)\n"
        "CRITICAL: handle-event methods MUST return a MAP {:state <new-state> :actions [<action-maps>]}.\n"
        "Do NOT return a vector [state actions]. This will break the system.\n"
-       "Example: {:state (assoc state :foo 1) :actions [{:type :think :prompt \"reflect\"}]}\n"
-       "Available namespaces: mealy.cell.reducer, mealy.action.core, mealy.intelligence.llm, mealy.ooda.prompt, mealy.cell.mitosis, clojure.string, clojure.core.async"))
+       "Example: {:state (assoc state :foo 1) :actions [{:type :think :prompt \"reflect\" :complexity :high}]}\n"
+       "Available namespaces: mealy.cell.reducer, mealy.action.core, mealy.intelligence.llm, mealy.ooda.prompt, mealy.cell.mitosis, clojure.string, clojure.core.async\n\n"
+       "ACTION SPEC REFERENCE — each action in :actions MUST conform to these shapes:\n"
+       "  :think          — {:type :think :prompt <string> :complexity <:low|:medium|:high>} (complexity optional, defaults to :medium)\n"
+       "  :propose        — {:type :propose :prompt <string>}\n"
+       "  :inject-event   — {:type :inject-event :event <vector>}\n"
+       "  :eval           — {:type :eval :code <string>}\n"
+       "  :http-request   — {:type :http-request :req {:url <string> :method <:get|:post|...>} :callback-event <keyword>}\n"
+       "  :bus-publish     — {:type :bus-publish :topic <keyword> :event <map>}\n"
+       "  :start-subscription — {:type :start-subscription :config {:type <keyword> ...}}\n"
+       "  :stop-subscription  — {:type :stop-subscription :config <map> :handle <keyword>}\n"
+       "  :spawn-cell     — {:type :spawn-cell :child-aim <string> :partition-keys <set of keywords> :bootstrap-mode <:fresh|:inherit>}\n"
+       "  :app-event      — {:type :app-event :event-type <keyword>}\n"
+       "IMPORTANT: :http-request requires a nested :req map (hato format) and :callback-event (keyword), NOT :url/:on-success at the top level."))
 
 (def code-review-system-prompt
   "Persona for reviewing candidate code before live execution."
@@ -44,7 +56,13 @@
        "Your task is to analyze the proposed Clojure code and decide whether to approve it.\n"
        "Ensure it strictly extends either `mealy.action.core/execute` or `mealy.cell.reducer/handle-event`.\n"
        "CRITICAL CHECK: handle-event methods MUST return a MAP {:state <new-state> :actions [...]}.\n"
-       "If the code returns a vector like [state actions] instead of a map, that is WRONG — OBJECTION.\n"
+       "If the code returns a vector like [state actions] instead of a map, that is WRONG — OBJECTION.\n\n"
+       "ACTION SHAPE VALIDATION — verify that every action map conforms:\n"
+       "  :http-request MUST have :req {:url <string>} and :callback-event <keyword> (NOT :url/:on-success at top level)\n"
+       "  :think MUST have :prompt <string>, optional :complexity <:low|:medium|:high> (defaults to :medium)\n"
+       "  :propose MUST have :prompt <string>\n"
+       "  :inject-event MUST have :event <vector>\n"
+       "  :spawn-cell MUST have :child-aim <string>\n\n"
        "Provide your critique. If the code looks syntactically correct and logical, YOU MUST CONCLUDE WITH THE EXACT WORD 'CONSENT'.\n"
        "If it has logic errors, returns wrong types, hallucinates unavailable functions, or violates boundaries, YOU MUST CONCLUDE WITH THE EXACT WORD 'OBJECTION' along with your reasoning."))
 

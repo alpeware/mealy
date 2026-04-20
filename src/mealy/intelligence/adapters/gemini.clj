@@ -17,24 +17,21 @@
      :body (json/generate-string body-map)}))
 
 (defn parse-response
-  "Pure function to parse the HTTP response map from Gemini."
+  "Pure function to parse the HTTP response map from Gemini.
+   Expects :body to be an already-parsed EDN map (auto-parsed by the
+   :http-request executor). Falls back to JSON parsing if body is a string."
   [response-map]
   (let [status (or (:status response-map) 500)
         body (:body response-map)
-        parsed-body (try
-                      (if (string? body)
-                        (json/parse-string body true)
-                        body)
-                      (catch Exception _
-                        body))]
+        parsed-body (if (string? body)
+                      (try (json/parse-string body true) (catch Exception _ body))
+                      body)]
     (if (and (>= status 200) (< status 300))
-      (let [response-text (-> parsed-body
-                              :candidates
-                              first
-                              :content
-                              :parts
-                              first
-                              :text)
+      (let [parts (-> parsed-body :candidates first :content :parts)
+            ;; Thinking models (e.g. Gemma) emit {:thought true :text ""}
+            ;; as the first part. Filter those out and join the rest.
+            visible-parts (remove :thought parts)
+            response-text (apply str (map :text visible-parts))
             token-count (-> parsed-body
                             :usageMetadata
                             :totalTokenCount)]

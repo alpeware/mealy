@@ -17,13 +17,14 @@
            :stream false})})
 
 (defn parse-response
-  "Pure function to parse the HTTP response map from Ollama."
+  "Pure function to parse the HTTP response map from Ollama.
+   Expects :body to be an already-parsed EDN map (auto-parsed by the
+   :http-request executor). Falls back to JSON parsing if body is a string."
   [{:keys [body] :as response-map}]
   (let [status (or (:status response-map) 500)
-        parsed-body (try
-                      (json/parse-string body true)
-                      (catch Exception _
-                        body))]
+        parsed-body (if (string? body)
+                      (try (json/parse-string body true) (catch Exception _ body))
+                      body)]
     (if (and (>= status 200) (< status 300))
       (let [response-text (-> parsed-body :choices first :message :content)
             token-count (-> parsed-body :usage :total_tokens)]

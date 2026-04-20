@@ -27,6 +27,7 @@
   ;; Intelligence LLM helpers
   (swap! (:env ctx) assoc-in [:namespaces 'mealy.intelligence.llm]
          {'route-llm-request     llm/route-llm-request
+          'reroute-on-failure    llm/reroute-on-failure
           'parse-llm-response    llm/parse-llm-response
           'update-provider-state llm/update-provider-state
           'parse-consent         llm/parse-consent

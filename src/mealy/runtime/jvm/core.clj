@@ -1,12 +1,14 @@
 (ns mealy.runtime.jvm.core
   "The JVM runtime entry point for Mealy cells. Adapts the pure Sans-IO core to core.async channels
   and wires it to the JVM EventStore and EventBus."
-  (:require [clojure.core.async :as async :refer [go-loop <! >!]]
+  (:require [cheshire.core :as json]
+            [clojure.core.async :as async :refer [go-loop <! >!]]
             [hato.client :as hc]
             [mealy.action.core :as action]
             [mealy.cell.boot :as boot]
             [mealy.cell.core :as cell]
             [mealy.cell.reducer :as reducer]
+            [mealy.intelligence.llm :as llm]
             [mealy.runtime.jvm.store :as store]
             [mealy.runtime.protocols :as p]))
 
@@ -28,17 +30,40 @@
   [_]
   false)
 
+(defn- json-content-type?
+  "Returns true if the response headers indicate a JSON content type."
+  [headers]
+  (when-let [ct (or (get headers "content-type")
+                    (get headers "Content-Type"))]
+    (re-find #"application/json" ct)))
+
+(defn- maybe-parse-json-body
+  "If the response has a JSON content-type header, parse the body string
+   into an EDN map using Cheshire. Otherwise return the body as-is."
+  [resp]
+  (let [headers (:headers resp)
+        body (:body resp)]
+    (if (and (string? body) (json-content-type? headers))
+      (try
+        (json/parse-string body true)
+        (catch Exception _ body))
+      body)))
+
 (.addMethod action/execute :http-request
             (with-meta
               (fn [{:keys [req callback-event]} env]
                 (let [cell-in-chan (or (:cell-in-chan env) (:in-chan env))
-                      future (hc/request (assoc req :async? true))]
+                      req-with-defaults (merge {:connection-timeout 30000
+                                                :timeout 120000}
+                                               req
+                                               {:async? true})
+                      future (hc/request req-with-defaults)]
                   (-> future
                       (.thenAccept
                        (reify java.util.function.Consumer
                          (accept [_ resp]
                            (let [status (:status resp)
-                                 body (:body resp)]
+                                 body (maybe-parse-json-body resp)]
                              (async/put! cell-in-chan [callback-event {:response {:status status :body body}}])))))
                       (.exceptionally
                        (reify java.util.function.Function
@@ -47,11 +72,12 @@
                                          (.getCause ex)
                                          ex)]
                              (if (instance? clojure.lang.ExceptionInfo cause)
-                               (let [resp (ex-data cause)]
-                                 (async/put! cell-in-chan [callback-event {:error true :status (:status resp) :body (:body resp)}]))
+                               (let [resp (ex-data cause)
+                                     body (maybe-parse-json-body resp)]
+                                 (async/put! cell-in-chan [callback-event {:error true :status (:status resp) :body body}]))
                                (async/put! cell-in-chan [callback-event {:error true :reason (.getMessage cause)}])))
                            nil))))))
-              {:doc "HTTP-request: async HTTP call via hato. Params: :req (hato request map with :url, :method, optional :headers, :body), :callback-event (keyword — the event type to emit with the response). Example: {:type :http-request :req {:url \"https://api.example.com/data\" :method :get} :callback-event :api-response}"}))
+              {:doc "HTTP-request: async HTTP call via hato. Params: :req (hato request map with :url, :method, optional :headers, :body), :callback-event (keyword — the event type to emit with the response). JSON response bodies are automatically parsed into EDN based on content-type headers. Example: {:type :http-request :req {:url \"https://api.example.com/data\" :method :get} :callback-event :api-response}"}))
 
 (.addMethod action/execute :bus-publish
             (with-meta
@@ -145,7 +171,33 @@
                        (if-let [event (<! in-chan)]
                          (let [_ (when (persist-event? event)
                                    (<! (async/thread (p/put event-store id event))))
-                               {:keys [state actions]} (reducer/handle-event state event)
+                               ;; Centralized LLM error interception: if this event is an
+                               ;; HTTP error response for a routed LLM request, intercept
+                               ;; before the handler, set backoff on the failed provider,
+                               ;; and reroute to the next-best provider.
+                               {:keys [state actions]}
+                               (let [[event-type event-data] event
+                                     routing-ctx (get-in state [:memory :llm-routing-context])
+                                     is-llm-error? (and (map? event-data)
+                                                        (:error event-data)
+                                                        routing-ctx
+                                                        (= event-type (:callback-event routing-ctx)))]
+                                 (if is-llm-error?
+                                   (let [;; Set backoff on the failed provider
+                                         error-msg (or (get-in event-data [:body :error :message])
+                                                       (:reason event-data)
+                                                       "HTTP error")
+                                         status (or (:status event-data) 500)
+                                         backoff-ms (if (= status 429) 60000 1000)
+                                         state-with-backoff (llm/update-provider-state
+                                                             state
+                                                             {:error true :reason error-msg :backoff-ms backoff-ms})]
+                                     ;; Try reroute to next-best provider
+                                     (or (llm/reroute-on-failure state-with-backoff)
+                                         ;; No fallback available — dispatch to handler normally
+                                         (reducer/handle-event state-with-backoff event)))
+                                   ;; Not an LLM error — normal dispatch
+                                   (reducer/handle-event state event)))
                                new-count (inc event-count)]
 
                            (when-let [sa (:state-atom opts)]
@@ -161,7 +213,7 @@
                            (doseq [cmd actions]
                              (if (= (:type cmd) :app-event)
                                (>! app-out-chan cmd)
-                               (when cmd (>! out-chan cmd))))
+                               (when cmd (>! out-chan (assoc cmd :cell-state state)))))
                            (recur state new-count))
                          (do
                            (async/close! out-chan)

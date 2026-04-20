@@ -38,23 +38,23 @@
 (defn score-provider
   "Scores a provider based on its state, required complexity, and estimated tokens.
    A negative score means the provider cannot or should not be used.
-   Higher positive score is better."
+   Higher positive score is better.
+   Scoring:
+     - Exact match:             100
+     - Over-provisioned:        90, 80 (slight penalty per step above required)
+     - Under-provisioned:       50, 30, 10 (steep penalty but still positive,
+                                so the closest fallback always wins)"
   [provider-state required-complexity estimated-tokens]
   (if (or (= (:status provider-state) :backoff)
           (< (:budget provider-state) estimated-tokens))
     -1
     (let [provider-c (get complexity-scores (:complexity provider-state) 0)
           required-c (get complexity-scores required-complexity 0)
-          ;; Score logic:
-          ;; We prefer matching complexity (delta 0).
-          ;; If provider > required (e.g. provider high, required low), delta > 0. It's fine but maybe wasteful.
-          ;; If provider < required (e.g. provider low, required high), delta < 0. We penalize this heavily.
-          delta (- provider-c required-c)
-          complexity-score (cond
-                             (= delta 0) 100
-                             (> delta 0) (- 100 (* delta 10)) ;; slightly penalize over-provisioning
-                             (< delta 0) (max 0 (- 10 (* (- delta) 20))))] ;; heavily penalize under-provisioning, but keep non-negative
-      complexity-score)))
+          delta (- provider-c required-c)]
+      (cond
+        (= delta 0) 100
+        (> delta 0) (- 100 (* delta 10))                     ;; 90, 80
+        :else       (max 1 (- 70 (* (- delta) 20)))))))
 
 (defn select-best-provider
   "Selects the optimal provider ID given a map of provider states."

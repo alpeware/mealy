@@ -54,10 +54,13 @@
   (let [parsed (llm/parse-llm-response state (:response event-data))
         state-updated (llm/update-provider-state state parsed)]
     (if (:error parsed)
-      {:state (-> state-updated (assoc :phase :idle) (assoc :last-error (:reason parsed)))
-       :actions []}
+      (or (llm/reroute-on-failure state-updated)
+          {:state (-> state-updated (assoc :phase :idle) (assoc :last-error (:reason parsed)))
+           :actions []})
       (let [actions-edn (llm/extract-edn-array (:response parsed))]
-        {:state (assoc state-updated :phase :idle)
+        {:state (-> state-updated
+                    (assoc :phase :idle)
+                    (update :memory dissoc :llm-routing-context))
          :actions actions-edn}))))
 
 ;; ---------------------------------------------------------------------------
@@ -93,33 +96,44 @@
 (defmethod reducer/handle-event :proposal-evaluated
   [state [_ event-data]]
   (let [parsed (llm/parse-llm-response state (:response event-data))
-        state-updated (llm/update-provider-state state parsed)
-        {:keys [consent]} (llm/parse-consent (:response parsed))
-        proposals (get-in state-updated [:memory :pending-proposals] [])
-        prompt-txt (first proposals)
-        rem-proposals (vec (rest proposals))
-        new-state (assoc-in state-updated [:memory :pending-proposals] rem-proposals)]
-    (if consent
-      (llm/route-llm-request (assoc new-state :phase :generating-code)
-                             [{:role "system" :content prompt/code-gen-system-prompt}
-                              {:role "user" :content prompt-txt}]
-                             :high 2000 :code-generated)
-      {:state (assoc new-state :phase :idle)
-       :actions []})))
+        state-updated (llm/update-provider-state state parsed)]
+    (if (:error parsed)
+      (or (llm/reroute-on-failure state-updated)
+          {:state (-> state-updated (assoc :phase :idle) (assoc :last-error (:reason parsed)))
+           :actions []})
+      (let [{:keys [consent]} (llm/parse-consent (:response parsed))
+            proposals (get-in state-updated [:memory :pending-proposals] [])
+            prompt-txt (first proposals)
+            rem-proposals (vec (rest proposals))
+            new-state (-> state-updated
+                          (assoc-in [:memory :pending-proposals] rem-proposals)
+                          (update :memory dissoc :llm-routing-context))]
+        (if consent
+          (llm/route-llm-request (assoc new-state :phase :generating-code)
+                                 [{:role "system" :content prompt/code-gen-system-prompt}
+                                  {:role "user" :content prompt-txt}]
+                                 :high 2000 :code-generated)
+          {:state (assoc new-state :phase :idle)
+           :actions []})))))
 
 (defmethod reducer/handle-event :code-generated
   [state [_ event-data]]
   (let [parsed (llm/parse-llm-response state (:response event-data))
-        state-updated (llm/update-provider-state state parsed)
-        ;; Strip markdown code blocks if any
-        code (-> (or (:response parsed) "")
-                 (str/replace #"(?s)^```[a-z]*\n" "")
-                 (str/replace #"(?s)\n```$" ""))
-        new-state (-> state-updated
-                      (assoc :phase :dry-running)
-                      (assoc-in [:memory :pending-code] code))]
-    {:state new-state
-     :actions [{:type :dry-run-eval :code code}]}))
+        state-updated (llm/update-provider-state state parsed)]
+    (if (:error parsed)
+      (or (llm/reroute-on-failure state-updated)
+          {:state (-> state-updated (assoc :phase :idle) (assoc :last-error (:reason parsed)))
+           :actions []})
+      (let [;; Strip markdown code blocks if any
+            code (-> (or (:response parsed) "")
+                     (str/replace #"(?s)^```[a-z]*\n" "")
+                     (str/replace #"(?s)\n```$" ""))
+            new-state (-> state-updated
+                          (assoc :phase :dry-running)
+                          (assoc-in [:memory :pending-code] code)
+                          (update :memory dissoc :llm-routing-context))]
+        {:state new-state
+         :actions [{:type :dry-run-eval :code code}]}))))
 
 (defmethod reducer/handle-event :dry-run-success
   [state [_ event-data]]
@@ -179,27 +193,35 @@
 (defmethod reducer/handle-event :policy-self-evaluated
   [state [_ event-data]]
   (let [parsed (llm/parse-llm-response state (:response event-data))
-        state-updated (llm/update-provider-state state parsed)
-        {:keys [consent]} (llm/parse-consent (:response parsed))
-        pending-policy (get-in state-updated [:memory :pending-policy-change])]
-    (if consent
-      (let [parent (:parent state-updated)
-            new-state (assoc state-updated :phase :awaiting-consent)]
-        (if (= parent :anchor)
-          {:state new-state
-           :actions [{:type :app-event
-                      :event-type :consent-request
-                      :policy pending-policy}]}
-          {:state new-state
-           :actions [{:type :bus-publish
-                      :topic parent
-                      :event {:type :consent-request
-                              :from (:id state-updated)
-                              :policy pending-policy}}]}))
-      {:state (-> state-updated
-                  (update :memory dissoc :pending-policy-change)
-                  (assoc :phase :idle))
-       :actions []})))
+        state-updated (llm/update-provider-state state parsed)]
+    (if (:error parsed)
+      (or (llm/reroute-on-failure state-updated)
+          {:state (-> state-updated
+                      (update :memory dissoc :pending-policy-change)
+                      (assoc :phase :idle)
+                      (assoc :last-error (:reason parsed)))
+           :actions []})
+      (let [{:keys [consent]} (llm/parse-consent (:response parsed))
+            pending-policy (get-in state-updated [:memory :pending-policy-change])
+            state-clean (update state-updated :memory dissoc :llm-routing-context)]
+        (if consent
+          (let [parent (:parent state-clean)
+                new-state (assoc state-clean :phase :awaiting-consent)]
+            (if (= parent :anchor)
+              {:state new-state
+               :actions [{:type :app-event
+                          :event-type :consent-request
+                          :policy pending-policy}]}
+              {:state new-state
+               :actions [{:type :bus-publish
+                          :topic parent
+                          :event {:type :consent-request
+                                  :from (:id state-clean)
+                                  :policy pending-policy}}]}))
+          {:state (-> state-clean
+                      (update :memory dissoc :pending-policy-change)
+                      (assoc :phase :idle))
+           :actions []})))))
 
 (defmethod reducer/handle-event :consent-granted
   [state [_ event-data]]
@@ -226,10 +248,11 @@
 
 (defmethod reducer/handle-event :think-request
   [state [_ event-data]]
-  (llm/route-llm-request state
-                         [{:role "system" :content (prompt/compile-think-system-prompt state)}
-                          {:role "user" :content (:prompt event-data)}]
-                         :low 500 :thought-result))
+  (let [complexity (or (:complexity event-data) :medium)]
+    (llm/route-llm-request state
+                           [{:role "system" :content (prompt/compile-think-system-prompt state)}
+                            {:role "user" :content (:prompt event-data)}]
+                           complexity 500 :thought-result)))
 
 (defmethod reducer/handle-event :thought-result
   [state [_ event-data]]

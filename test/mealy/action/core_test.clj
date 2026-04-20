@@ -20,7 +20,7 @@
           action {:type :think :prompt "What is the meaning of life?"}
           env {:cell-in-chan cell-in-chan}]
       (action/execute action env)
-      (let [expected [:think-request {:prompt "What is the meaning of life?"}]
+      (let [expected [:think-request {:prompt "What is the meaning of life?" :complexity :medium}]
             ;; alts!! with timeout prevents test hangs
             [val port] (a/alts!! [cell-in-chan (a/timeout 100)])]
         (is (= cell-in-chan port) "A value should be put on the cell-in-chan")
